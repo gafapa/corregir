@@ -42,3 +42,14 @@ pub struct EntregaResumen {
     pub metodo_ocr: Option<String>,
     pub estado_pipeline: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogAuditoria {
+    pub id: i64,
+    pub entrega_id: Option<i64>,
+    pub evento: String,
+    pub actor: String,
+    pub version_modelo: Option<String>,
+    pub payload_json: Option<String>,
+    pub creado_en: String,
+}

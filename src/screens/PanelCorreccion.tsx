@@ -13,16 +13,22 @@ import { CriterioConId, EntregaResumen, EvidenciaCriterio, FeedbackYConsistencia
 export function PanelCorreccion({
   entrega,
   criterios,
+  onNotaConfirmada,
 }: {
   entrega: EntregaResumen;
   criterios: CriterioConId[];
+  onNotaConfirmada?: () => void;
 }) {
   const [evidencias, setEvidencias] = useState<EvidenciaCriterio[]>([]);
   const [puntuaciones, setPuntuaciones] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<FeedbackYConsistencia | null>(null);
+  const [notaConfirmada, setNotaConfirmada] = useState<number | null>(null);
   const [cargando, setCargando] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  if (entrega.estado_pipeline === "nota_confirmada") {
+    return <p>✅ Nota confirmada para la entrega #{entrega.id}.</p>;
+  }
   if (entrega.estado_pipeline !== "anonimizada") {
     return null;
   }
@@ -58,6 +64,20 @@ export function PanelCorreccion({
           comentario_docente: null,
         }));
       await invoke("cmd_guardar_nota_tentativa", { entregaId: entrega.id, evaluaciones });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCargando(null);
+    }
+  }
+
+  async function confirmarNota() {
+    setCargando("confirmar");
+    setError(null);
+    try {
+      const total = await invoke<number>("cmd_confirmar_nota", { entregaId: entrega.id });
+      setNotaConfirmada(total);
+      onNotaConfirmada?.();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -149,6 +169,17 @@ export function PanelCorreccion({
           )}
         </div>
       )}
+
+      <div style={{ marginTop: "0.5rem" }}>
+        <button onClick={confirmarNota} disabled={cargando !== null}>
+          {cargando === "confirmar" ? "Confirmando…" : "4. Confirmar nota (checkpoint final, Hito 6)"}
+        </button>
+        {notaConfirmada !== null && (
+          <span style={{ marginLeft: "0.5rem" }}>
+            ✅ Nota total confirmada: <strong>{notaConfirmada}</strong>
+          </span>
+        )}
+      </div>
 
       {error && <pre style={{ color: "crimson" }}>{error}</pre>}
     </div>

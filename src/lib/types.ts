@@ -55,6 +55,16 @@ export interface FeedbackYConsistencia {
   inconsistencias: Inconsistencia[];
 }
 
+export interface LogAuditoria {
+  id: number;
+  entrega_id: number | null;
+  evento: string;
+  actor: string;
+  version_modelo: string | null;
+  payload_json: string | null;
+  creado_en: string;
+}
+
 /** Casos de prueba sintéticos definidos en el plan (docs, Hito de pruebas). */
 export const RUBRICAS_SINTETICAS: NuevaRubrica[] = [
   {

@@ -11,7 +11,9 @@ use commands::anonimizacion::{cmd_confirmar_anonimizacion, cmd_detectar_identifi
 use commands::configuracion::{cmd_crear_enunciado, cmd_crear_rubrica, cmd_listar_rubricas};
 use commands::correccion::{cmd_guardar_nota_tentativa, cmd_invocar_evidencias, cmd_invocar_feedback};
 use commands::diagnostico::cmd_probar_conexion_ia;
+use commands::exportacion::{cmd_exportar_csv, cmd_listar_logs_auditoria};
 use commands::ingesta::{cmd_importar_entrega, cmd_listar_entregas};
+use commands::revision::cmd_confirmar_nota;
 use pipeline::ocr_engine::MotorOcr;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -51,6 +53,9 @@ pub fn run() {
             cmd_invocar_evidencias,
             cmd_guardar_nota_tentativa,
             cmd_invocar_feedback,
+            cmd_confirmar_nota,
+            cmd_exportar_csv,
+            cmd_listar_logs_auditoria,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

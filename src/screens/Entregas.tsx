@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { EntregaResumen, RubricaConCriterios } from "../lib/types";
 import { PanelAnonimizacion } from "./PanelAnonimizacion";
 import { PanelCorreccion } from "./PanelCorreccion";
@@ -69,6 +69,25 @@ export function Entregas() {
     }
   }
 
+  async function exportarCsv() {
+    if (enunciadoId === null) return;
+    const destino = await save({
+      defaultPath: "notas.csv",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (!destino) return;
+    setError(null);
+    try {
+      const filas = await invoke<number>("cmd_exportar_csv", {
+        enunciadoId,
+        rutaDestino: destino,
+      });
+      alert(`Exportadas ${filas} entregas con nota confirmada a ${destino}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <section>
       <h2>Entregas (Hito 3)</h2>
@@ -101,6 +120,7 @@ export function Entregas() {
           <button onClick={importarArchivo} disabled={cargando}>
             {cargando ? "Procesando…" : "Importar PDF/imagen…"}
           </button>
+          <button onClick={exportarCsv}>Exportar CSV (Hito 6)</button>
         </>
       )}
 
@@ -122,6 +142,7 @@ export function Entregas() {
               <PanelCorreccion
                 entrega={e}
                 criterios={rubricas.find((r) => r.id === rubricaId)?.criterios ?? []}
+                onNotaConfirmada={() => enunciadoId !== null && recargarEntregas(enunciadoId)}
               />
             )}
           </li>

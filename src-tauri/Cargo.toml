@@ -41,6 +41,7 @@ ocrs = "0.13"
 rten = "0.26"
 image = "0.25"
 regex = "1"
+csv = "1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
