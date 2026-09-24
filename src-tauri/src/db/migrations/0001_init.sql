@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS resultados (
     comentario_ia TEXT,
     comentario_docente TEXT,
     confirmado_por_docente INTEGER NOT NULL DEFAULT 0,
-    confirmado_en TEXT
+    confirmado_en TEXT,
+    UNIQUE(entrega_id, criterio_id)
 );
 
 -- Trazabilidad exigida por el Art. 12 del Reglamento de IA.

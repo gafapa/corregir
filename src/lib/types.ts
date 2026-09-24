@@ -40,6 +40,21 @@ export interface CandidatoIdentificador {
   fin: number;
 }
 
+export interface EvidenciaCriterio {
+  criterio_id: string;
+  evidencia_textual: string[];
+}
+
+export interface Inconsistencia {
+  criterio_id: string;
+  observacion: string;
+}
+
+export interface FeedbackYConsistencia {
+  comentario_feedback: string;
+  inconsistencias: Inconsistencia[];
+}
+
 /** Casos de prueba sintéticos definidos en el plan (docs, Hito de pruebas). */
 export const RUBRICAS_SINTETICAS: NuevaRubrica[] = [
   {

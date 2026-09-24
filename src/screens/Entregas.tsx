@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { EntregaResumen, RubricaConCriterios } from "../lib/types";
 import { PanelAnonimizacion } from "./PanelAnonimizacion";
+import { PanelCorreccion } from "./PanelCorreccion";
 
 /**
  * Hito 3: ingesta de entregas (PDF/imagen) y ejecución del pipeline de
@@ -117,6 +118,12 @@ export function Entregas() {
               entrega={e}
               onConfirmado={() => enunciadoId !== null && recargarEntregas(enunciadoId)}
             />
+            {rubricaId !== null && (
+              <PanelCorreccion
+                entrega={e}
+                criterios={rubricas.find((r) => r.id === rubricaId)?.criterios ?? []}
+              />
+            )}
           </li>
         ))}
       </ul>
