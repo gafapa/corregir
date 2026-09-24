@@ -33,6 +33,13 @@ export interface EntregaResumen {
   estado_pipeline: string;
 }
 
+export interface CandidatoIdentificador {
+  tipo: string;
+  texto: string;
+  inicio: number;
+  fin: number;
+}
+
 /** Casos de prueba sintéticos definidos en el plan (docs, Hito de pruebas). */
 export const RUBRICAS_SINTETICAS: NuevaRubrica[] = [
   {

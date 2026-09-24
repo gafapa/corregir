@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { EntregaResumen, RubricaConCriterios } from "../lib/types";
+import { PanelAnonimizacion } from "./PanelAnonimizacion";
 
 /**
  * Hito 3: ingesta de entregas (PDF/imagen) y ejecución del pipeline de
@@ -112,6 +113,10 @@ export function Entregas() {
               #{e.id} — método: {e.metodo_ocr ?? "?"} — estado: {e.estado_pipeline}
             </strong>
             <pre style={{ whiteSpace: "pre-wrap" }}>{e.texto_ocr}</pre>
+            <PanelAnonimizacion
+              entrega={e}
+              onConfirmado={() => enunciadoId !== null && recargarEntregas(enunciadoId)}
+            />
           </li>
         ))}
       </ul>
