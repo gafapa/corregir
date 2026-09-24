@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-app",
+  "productName": "Corregir",
   "version": "0.1.0",
   "identifier": "com.corregir.desktop",
   "build": {
@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "tauri-app",
-        "width": 800,
-        "height": 600
+        "title": "Corregir — Asistente de corrección (Fase A, datos sintéticos)",
+        "width": 1100,
+        "height": 750
       }
     ],
     "security": {
