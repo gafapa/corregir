@@ -13,13 +13,23 @@
 //! abrir la app se descifra a una copia de trabajo en claro
 //! (`corregir.sqlite`) en el mismo directorio, y se vuelve a cifrar
 //! (`sellar`) tras cada operación que escribe datos y al cerrar la
-//! aplicación. La copia en claro existe solo mientras la app está en uso
-//! activo — el mismo modelo de amenaza que un gestor de contraseñas
-//! "desbloqueado". Riesgo residual documentado: si el proceso termina de
-//! forma abrupta (corte de luz, kill -9) entre una escritura y el siguiente
-//! sellado, la copia en claro puede quedar en disco hasta el próximo
-//! arranque, que la vuelve a sellar. Aceptable para un piloto de un solo
-//! profesor con datos sintéticos; a revisar antes de Fase C.
+//! aplicación.
+//!
+//! Riesgo residual documentado (pendiente antes de Fase C, ver
+//! docs/DPIA-EIPD.md): `sellar` vuelve a cifrar sobre `.enc`, pero no borra
+//! ni sobrescribe la copia en claro (`corregir.sqlite`) -- no se puede hacer
+//! de forma segura mientras la conexion de rusqlite sigue teniendo el
+//! fichero abierto (en Windows ni siquiera se puede borrar). Consecuencia:
+//! la copia en claro queda en disco no solo si el proceso termina de forma
+//! abrupta, sino tambien tras un cierre normal de la app, hasta el
+//! siguiente arranque (que la sobrescribe al descifrar de nuevo).
+//! Arreglarlo de raiz exige poder cerrar la conexion explicitamente antes
+//! de salir (cambiar DbState.conn a Mutex<Option<Connection>> y anadir un
+//! cierre explicito en el on_window_event), lo que afecta a todos los
+//! comandos que usan db.conn.lock(). Se pospone deliberadamente: la Fase A
+//! solo usa datos sinteticos, asi que no hay nada sensible que proteger
+//! todavia, pero es un bloqueante real antes de procesar datos de alumnos
+//! reales (Fase C).
 
 use std::fs;
 use std::path::{Path, PathBuf};

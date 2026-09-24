@@ -303,6 +303,22 @@ punto de partida, pero hay una distinción importante que no depende de la tecno
    aplican desde el 2 de diciembre de 2027, lo que da margen para completar los pasos
    2-4 antes.
 
+## Hito 8 (purga de originales): satisfecho por diseño, no por una función de purga
+
+El plan preveía un comando `cmd_purgar_originales` que borrara una "copia de trabajo"
+del documento original tras la exportación. En la implementación real (Hito 3,
+`pipeline::render`), esa copia de trabajo nunca llega a escribirse en disco: Pdfium abre
+el PDF original directamente desde su ruta y rasteriza a memoria, y las imágenes sueltas
+se cargan igual, directamente a memoria. El documento original se queda exactamente
+donde el profesor lo tenía (su propio Escritorio/Descargas/etc.) y la aplicación nunca
+escribe una copia de él en ningún otro sitio. No hay nada que purgar porque nunca se creó
+una copia — un diseño más simple que además cumple mejor la minimización de datos que el
+plan original.
+
+Esto es un problema **distinto** del riesgo residual de la copia en claro de la base de
+datos (ver `src-tauri/src/db/schema.rs` y `DPIA-EIPD.md`, pendiente #0): ese riesgo es
+sobre los *resultados* almacenados en la BD local, no sobre los documentos originales.
+
 ## Nota sobre "anonimización" vs. "seudonimización"
 
 Todo el pipeline anterior habla de **seudonimización**, no de anonimización real. Un

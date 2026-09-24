@@ -183,6 +183,13 @@ directa, no condicional:
 
 ## Pendiente antes de producción con datos reales
 
+0. **Cerrar el gap de la copia en claro de la base de datos al cerrar la app**
+   (detectado en Hito 8, 2026-09-25): `sellar()` vuelve a cifrar sobre `.enc` pero no
+   borra la copia en claro (`corregir.sqlite`), que queda en disco desde el cierre
+   normal de la app hasta el siguiente arranque. Requiere poder cerrar la conexión de
+   SQLite explícitamente antes de salir — ver nota en `src-tauri/src/db/schema.rs`.
+   Sin datos reales de por medio (Fase A), no es explotable; es bloqueante antes de
+   Fase C.
 1. Elegir el modelo autoalojado concreto y validar que el hardware disponible en el
    piloto le da una calidad suficiente para el modo "Asistente de corrección".
 2. Conversación informal con dirección/DPO del centro antes de procesar la primera
