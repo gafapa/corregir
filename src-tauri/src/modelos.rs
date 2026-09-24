@@ -33,3 +33,12 @@ pub struct RubricaConCriterios {
     pub version: i64,
     pub criterios: Vec<CriterioConId>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntregaResumen {
+    pub id: i64,
+    pub enunciado_id: i64,
+    pub texto_ocr: Option<String>,
+    pub metodo_ocr: Option<String>,
+    pub estado_pipeline: String,
+}

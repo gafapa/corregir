@@ -25,6 +25,14 @@ export interface RubricaConCriterios {
   criterios: CriterioConId[];
 }
 
+export interface EntregaResumen {
+  id: number;
+  enunciado_id: number;
+  texto_ocr: string | null;
+  metodo_ocr: string | null;
+  estado_pipeline: string;
+}
+
 /** Casos de prueba sintéticos definidos en el plan (docs, Hito de pruebas). */
 export const RUBRICAS_SINTETICAS: NuevaRubrica[] = [
   {

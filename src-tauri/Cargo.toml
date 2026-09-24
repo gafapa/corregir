@@ -23,6 +23,7 @@ tempfile = "3"
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json"] }
@@ -35,6 +36,10 @@ rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 aes-gcm = "0.10"
 hex = "0.4"
+pdfium-render = "0.8"
+ocrs = "0.13"
+rten = "0.26"
+image = "0.25"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

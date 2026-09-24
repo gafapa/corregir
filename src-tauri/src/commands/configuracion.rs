@@ -4,6 +4,26 @@ use crate::db::DbState;
 use crate::modelos::{CriterioConId, NuevaRubrica, RubricaConCriterios};
 
 #[tauri::command]
+pub fn cmd_crear_enunciado(
+    db: State<DbState>,
+    rubrica_id: i64,
+    texto: String,
+    materiales_ref: Option<String>,
+) -> Result<i64, String> {
+    let id = {
+        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO enunciados (rubrica_id, texto, materiales_ref) VALUES (?1, ?2, ?3)",
+            rusqlite::params![rubrica_id, texto, materiales_ref],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.last_insert_rowid()
+    };
+    db.sellar().map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[tauri::command]
 pub fn cmd_crear_rubrica(db: State<DbState>, rubrica: NuevaRubrica) -> Result<i64, String> {
     let rubrica_id = {
         let mut conn = db.conn.lock().map_err(|e| e.to_string())?;

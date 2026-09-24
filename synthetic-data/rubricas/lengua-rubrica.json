@@ -1,0 +1,22 @@
+{
+  "titulo": "Análisis de poema",
+  "asignatura": "Lingua/Lengua",
+  "curso": "2º ESO",
+  "criterios": [
+    {
+      "codigo": "C1",
+      "descripcion": "Identifica correctamente el tema principal.",
+      "puntuacion_max": 4
+    },
+    {
+      "codigo": "C2",
+      "descripcion": "Identifica y explica al menos 2 recursos literarios con ejemplo textual.",
+      "puntuacion_max": 3
+    },
+    {
+      "codigo": "C3",
+      "descripcion": "Coherencia y corrección expresiva.",
+      "puntuacion_max": 3
+    }
+  ]
+}
