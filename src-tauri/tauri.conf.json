@@ -34,7 +34,8 @@
     "resources": {
       "resources/pdfium/bin/pdfium.dll": "pdfium/bin/pdfium.dll",
       "resources/models/ocr/text-detection.rten": "models/ocr/text-detection.rten",
-      "resources/models/ocr/text-recognition.rten": "models/ocr/text-recognition.rten"
+      "resources/models/ocr/text-recognition.rten": "models/ocr/text-recognition.rten",
+      "resources/fonts/Roboto-Regular.ttf": "fonts/Roboto-Regular.ttf"
     }
   }
 }

@@ -41,6 +41,12 @@ pub struct EntregaResumen {
     pub texto_ocr: Option<String>,
     pub metodo_ocr: Option<String>,
     pub estado_pipeline: String,
+    /// Resuelto solo en memoria para esta respuesta (join con
+    /// `alias_alumno_map`), nunca persistido en ningún sitio nuevo. El
+    /// profesor necesita ver a quién corresponde cada entrega mientras
+    /// corrige — sin esto, con más de un alumno no hay forma de saber en
+    /// pantalla quién es quién (ver revisión de objetivos, 2026-09-25).
+    pub alumno_nombre: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -27,3 +27,7 @@ pub fn dir_pdfium(app: &AppHandle) -> PathBuf {
 pub fn dir_modelos_ocr(app: &AppHandle) -> PathBuf {
     resolver(app, "models/ocr")
 }
+
+pub fn ruta_fuente_pdf(app: &AppHandle) -> PathBuf {
+    resolver(app, "fonts").join("Roboto-Regular.ttf")
+}

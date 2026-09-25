@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { LogAuditoria } from "../lib/types";
 
 /**
@@ -27,10 +28,29 @@ export function Auditoria() {
     recargar();
   }, []);
 
+  async function exportarCsv() {
+    const destino = await save({
+      defaultPath: "auditoria.csv",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (!destino) return;
+    setError(null);
+    try {
+      const filas = await invoke<number>("cmd_exportar_logs_csv", {
+        entregaId: null,
+        rutaDestino: destino,
+      });
+      alert(`Exportadas ${filas} entradas del registro a ${destino}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <section>
       <h2>Auditoría (Hito 7)</h2>
       <button onClick={recargar}>Recargar</button>
+      <button onClick={exportarCsv}>Exportar a CSV</button>
       {error && <pre style={{ color: "crimson" }}>{error}</pre>}
       <table style={{ width: "100%", marginTop: "0.5rem", borderCollapse: "collapse" }}>
         <thead>

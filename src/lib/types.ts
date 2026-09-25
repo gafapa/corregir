@@ -31,6 +31,7 @@ export interface EntregaResumen {
   texto_ocr: string | null;
   metodo_ocr: string | null;
   estado_pipeline: string;
+  alumno_nombre: string | null;
 }
 
 export interface CandidatoIdentificador {

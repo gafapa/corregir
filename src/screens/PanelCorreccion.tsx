@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { CriterioConId, EntregaResumen, EvidenciaCriterio, FeedbackYConsistencia } from "../lib/types";
 
 /**
@@ -26,8 +27,32 @@ export function PanelCorreccion({
   const [cargando, setCargando] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  async function exportarPdf() {
+    const destino = await save({
+      defaultPath: `feedback-entrega-${entrega.id}.pdf`,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (!destino) return;
+    setError(null);
+    try {
+      await invoke("cmd_exportar_pdf_feedback", { entregaId: entrega.id, rutaDestino: destino });
+      alert(`Hoja de feedback guardada en ${destino}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   if (entrega.estado_pipeline === "nota_confirmada") {
-    return <p>✅ Nota confirmada para la entrega #{entrega.id}.</p>;
+    return (
+      <div>
+        <p>
+          ✅ Nota confirmada para la entrega #{entrega.id}
+          {entrega.alumno_nombre ? ` (${entrega.alumno_nombre})` : ""}.
+        </p>
+        <button onClick={exportarPdf}>Exportar hoja de feedback (PDF)</button>
+        {error && <pre style={{ color: "crimson" }}>{error}</pre>}
+      </div>
+    );
   }
   if (entrega.estado_pipeline !== "anonimizada") {
     return null;
@@ -102,7 +127,10 @@ export function PanelCorreccion({
 
   return (
     <div style={{ border: "1px solid #99c", padding: "0.5rem", marginTop: "0.5rem" }}>
-      <h4>Corrección — modo Asistente (Hito 5)</h4>
+      <h4>
+        Corrección — modo Asistente
+        {entrega.alumno_nombre ? ` — ${entrega.alumno_nombre}` : ""}
+      </h4>
 
       <button onClick={invocarEvidencias} disabled={cargando !== null}>
         {cargando === "evidencias" ? "Consultando IA…" : "1. Localizar evidencia (sin nota)"}

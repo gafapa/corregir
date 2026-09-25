@@ -131,7 +131,9 @@ export function Entregas() {
         {entregas.map((e) => (
           <li key={e.id}>
             <strong>
-              #{e.id} — método: {e.metodo_ocr ?? "?"} — estado: {e.estado_pipeline}
+              #{e.id}
+              {e.alumno_nombre ? ` — ${e.alumno_nombre}` : ""} — método: {e.metodo_ocr ?? "?"} — estado:{" "}
+              {e.estado_pipeline}
             </strong>
             <pre style={{ whiteSpace: "pre-wrap" }}>{e.texto_ocr}</pre>
             <PanelAnonimizacion

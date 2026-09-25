@@ -106,8 +106,10 @@ pub fn cmd_listar_entregas(
     let conn = db.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, enunciado_id, texto_ocr, metodo_ocr, estado_pipeline
-             FROM entregas WHERE enunciado_id = ?1 ORDER BY id",
+            "SELECT e.id, e.enunciado_id, e.texto_ocr, e.metodo_ocr, e.estado_pipeline, m.alumno_nombre
+             FROM entregas e
+             LEFT JOIN alias_alumno_map m ON m.alias = e.alias
+             WHERE e.enunciado_id = ?1 ORDER BY e.id",
         )
         .map_err(|e| e.to_string())?;
     let filas = stmt
@@ -118,6 +120,7 @@ pub fn cmd_listar_entregas(
                 texto_ocr: row.get(2)?,
                 metodo_ocr: row.get(3)?,
                 estado_pipeline: row.get(4)?,
+                alumno_nombre: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?
