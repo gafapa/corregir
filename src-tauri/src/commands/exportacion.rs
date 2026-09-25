@@ -13,8 +13,9 @@ pub fn cmd_exportar_csv(
     enunciado_id: i64,
     ruta_destino: String,
 ) -> Result<usize, String> {
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
-    exportacion::generar_csv(&conn, enunciado_id, Path::new(&ruta_destino)).map_err(|e| e.to_string())
+    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
+    exportacion::generar_csv(conn, enunciado_id, Path::new(&ruta_destino)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -23,8 +24,9 @@ pub fn cmd_exportar_logs_csv(
     entrega_id: Option<i64>,
     ruta_destino: String,
 ) -> Result<usize, String> {
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
-    exportacion::generar_csv_logs(&conn, entrega_id, Path::new(&ruta_destino)).map_err(|e| e.to_string())
+    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
+    exportacion::generar_csv_logs(conn, entrega_id, Path::new(&ruta_destino)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -34,9 +36,10 @@ pub fn cmd_exportar_pdf_feedback(
     entrega_id: i64,
     ruta_destino: String,
 ) -> Result<(), String> {
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
     let ruta_fuente = recursos::ruta_fuente_pdf(&app);
-    exportacion::generar_pdf_feedback(&conn, entrega_id, &ruta_fuente, Path::new(&ruta_destino))
+    exportacion::generar_pdf_feedback(conn, entrega_id, &ruta_fuente, Path::new(&ruta_destino))
         .map_err(|e| e.to_string())
 }
 
@@ -45,6 +48,7 @@ pub fn cmd_listar_logs_auditoria(
     db: State<DbState>,
     entrega_id: Option<i64>,
 ) -> Result<Vec<LogAuditoria>, String> {
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
-    exportacion::listar_logs(&conn, entrega_id).map_err(|e| e.to_string())
+    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
+    exportacion::listar_logs(conn, entrega_id).map_err(|e| e.to_string())
 }

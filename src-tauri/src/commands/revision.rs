@@ -8,8 +8,9 @@ use crate::pipeline::revision;
 #[tauri::command]
 pub fn cmd_confirmar_nota(db: State<DbState>, entrega_id: i64) -> Result<f64, String> {
     let total = {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        revision::confirmar_nota(&conn, entrega_id).map_err(|e| e.to_string())?
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
+        revision::confirmar_nota(conn, entrega_id).map_err(|e| e.to_string())?
     };
     db.sellar().map_err(|e| e.to_string())?;
     Ok(total)

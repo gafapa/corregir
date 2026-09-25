@@ -87,10 +87,11 @@ mod tests {
     fn confirmar_nota_suma_puntuaciones_y_marca_estado() {
         let dir = tempdir().unwrap();
         let estado = schema::abrir_con_clave(dir.path(), [5u8; 32]).unwrap();
-        let conn = estado.conn.lock().unwrap();
-        let entrega_id = preparar_entrega_con_resultados(&conn);
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
+        let entrega_id = preparar_entrega_con_resultados(conn);
 
-        let total = confirmar_nota(&conn, entrega_id).unwrap();
+        let total = confirmar_nota(conn, entrega_id).unwrap();
         assert_eq!(total, 7.5);
 
         let estado_pipeline: String = conn

@@ -288,10 +288,11 @@ punto de partida, pero hay una distinción importante que no depende de la tecno
 1. **Piloto técnico con datos sintéticos**: construir y validar el pipeline completo
    (OCR, anonimización, corrección con modelo autoalojado, revisión humana) sin ningún
    dato real de alumnos. Esto se puede hacer ya, sin esperar a nadie.
-2. **Conversación informal con la dirección/DPO del propio centro** antes de tocar una
-   sola entrega real de un alumno, aunque sea a pequeña escala y solo en modo
-   "Asistente de corrección". Es la línea que separa una prueba técnica personal de un
-   tratamiento de datos de menores no autorizado.
+2. ~~Conversación informal con la dirección/DPO del propio centro~~ — **completado
+   (2026-09-25)**: tanto dirección como DPO han dado el visto bueno para avanzar. Esto
+   habilita procesar entregas reales a pequeña escala en modo "Asistente de corrección"
+   (no habilita por sí solo saltarse la validación formal del DPIA ni la información a
+   familias — ver `DPIA-EIPD.md`, "Pendiente antes de producción con datos reales").
 3. **Contacto con la Oficina de Intelixencia Artificial** de la Xunta (creada por la Ley
    2/2025) cuando el piloto quiera crecer más allá del propio centro/aula — este trámite
    no depende del ritmo de desarrollo, conviene iniciarlo con tiempo si el objetivo final

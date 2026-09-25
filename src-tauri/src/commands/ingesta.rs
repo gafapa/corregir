@@ -52,7 +52,8 @@ pub fn cmd_importar_entrega(
     };
 
     let entrega_id = {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
         conn.execute(
             "INSERT INTO entregas (enunciado_id, texto_ocr, metodo_ocr, estado_pipeline)
              VALUES (?1, ?2, ?3, 'ocr_completado')",
@@ -103,7 +104,8 @@ pub fn cmd_listar_entregas(
     db: State<DbState>,
     enunciado_id: i64,
 ) -> Result<Vec<EntregaResumen>, String> {
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
     let mut stmt = conn
         .prepare(
             "SELECT e.id, e.enunciado_id, e.texto_ocr, e.metodo_ocr, e.estado_pipeline, m.alumno_nombre

@@ -10,7 +10,8 @@ pub fn cmd_detectar_identificadores(
     entrega_id: i64,
     roster: Vec<String>,
 ) -> Result<Vec<CandidatoIdentificador>, String> {
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
     let texto: Option<String> = conn
         .query_row(
             "SELECT texto_ocr FROM entregas WHERE id = ?1",
@@ -34,9 +35,10 @@ pub fn cmd_confirmar_anonimizacion(
     alumno_id_clase: Option<String>,
 ) -> Result<String, String> {
     let alias = {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
         let confirmado = anonimizacion::confirmar(
-            &conn,
+            conn,
             entrega_id,
             &spans,
             &alumno_nombre,

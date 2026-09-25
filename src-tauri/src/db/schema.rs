@@ -15,21 +15,16 @@
 //! (`sellar`) tras cada operación que escribe datos y al cerrar la
 //! aplicación.
 //!
-//! Riesgo residual documentado (pendiente antes de Fase C, ver
-//! docs/DPIA-EIPD.md): `sellar` vuelve a cifrar sobre `.enc`, pero no borra
-//! ni sobrescribe la copia en claro (`corregir.sqlite`) -- no se puede hacer
-//! de forma segura mientras la conexion de rusqlite sigue teniendo el
-//! fichero abierto (en Windows ni siquiera se puede borrar). Consecuencia:
-//! la copia en claro queda en disco no solo si el proceso termina de forma
-//! abrupta, sino tambien tras un cierre normal de la app, hasta el
-//! siguiente arranque (que la sobrescribe al descifrar de nuevo).
-//! Arreglarlo de raiz exige poder cerrar la conexion explicitamente antes
-//! de salir (cambiar DbState.conn a Mutex<Option<Connection>> y anadir un
-//! cierre explicito en el on_window_event), lo que afecta a todos los
-//! comandos que usan db.conn.lock(). Se pospone deliberadamente: la Fase A
-//! solo usa datos sinteticos, asi que no hay nada sensible que proteger
-//! todavia, pero es un bloqueante real antes de procesar datos de alumnos
-//! reales (Fase C).
+//! Actualizado 2026-09-25 (gap cerrado): el riesgo residual que habia aqui
+//! documentado -- que `sellar` no borraba la copia en claro al cerrar la
+//! app -- se cerro tras el visto bueno de direccion/DPO para avanzar hacia
+//! datos reales. `DbState.conn` es ahora `Mutex<Option<Connection>>`;
+//! `sellar_y_cerrar` cierra la conexion explicitamente (liberando el
+//! fichero en Windows) y sobrescribe/borra la copia en claro. Se invoca
+//! solo al recibir `CloseRequested` en `lib.rs`. Tras llamarlo, cualquier
+//! comando que intente `db.conn.lock()...as_ref()` fallara con un error
+//! claro en vez de silenciosamente operar sobre datos obsoletos -- eso es
+//! intencional: ningun comando debe ejecutarse tras el cierre.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -63,9 +58,12 @@ pub enum DbError {
 }
 
 /// Estado gestionado por Tauri: conexión + lo necesario para volver a sellar
-/// (cifrar) la base de datos tras cada escritura.
+/// (cifrar) la base de datos tras cada escritura. `conn` es `Option` para
+/// poder cerrarla explícitamente al salir (ver `sellar_y_cerrar`); una vez
+/// cerrada, es `None` y cualquier comando que la use falla con un mensaje
+/// claro en vez de operar sobre datos obsoletos.
 pub struct DbState {
-    pub conn: Mutex<Connection>,
+    pub conn: Mutex<Option<Connection>>,
     ruta_plana: PathBuf,
     ruta_cifrada: PathBuf,
     clave: [u8; 32],
@@ -73,10 +71,35 @@ pub struct DbState {
 
 impl DbState {
     /// Vuelve a cifrar el fichero en claro sobre el fichero `.enc`. Debe
-    /// llamarse tras cualquier comando que escriba datos, y al cerrar la app.
+    /// llamarse tras cualquier comando que escriba datos. No cierra la
+    /// conexión ni toca la copia en claro (sigue en uso mientras la app
+    /// corre) -- para el cierre real de la app, usar `sellar_y_cerrar`.
     pub fn sellar(&self) -> Result<(), DbError> {
         let _guard = self.conn.lock().map_err(|_| DbError::MutexEnvenenado)?;
         cifrar_a_disco(&self.ruta_plana, &self.ruta_cifrada, &self.clave)
+    }
+
+    /// Sella una última vez, cierra la conexión de SQLite explícitamente
+    /// (liberando el fichero, imprescindible en Windows para poder tocarlo
+    /// después) y sobrescribe con ceros + borra la copia en claro. Debe
+    /// llamarse solo al cerrar la aplicación de verdad -- después de esto
+    /// ningún comando puede volver a usar `conn`.
+    pub fn sellar_y_cerrar(&self) -> Result<(), DbError> {
+        self.sellar()?;
+
+        let mut guard = self.conn.lock().map_err(|_| DbError::MutexEnvenenado)?;
+        *guard = None;
+        drop(guard);
+
+        if let Ok(metadata) = fs::metadata(&self.ruta_plana) {
+            let ceros = vec![0u8; metadata.len() as usize];
+            let _ = fs::write(&self.ruta_plana, ceros);
+        }
+        match fs::remove_file(&self.ruta_plana) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
@@ -144,7 +167,7 @@ pub fn abrir_con_clave(dir: &Path, clave: [u8; 32]) -> Result<DbState, DbError> 
     conn.execute_batch(MIGRACION_INICIAL)?;
 
     let estado = DbState {
-        conn: Mutex::new(conn),
+        conn: Mutex::new(Some(conn)),
         ruta_plana,
         ruta_cifrada,
         clave,
@@ -169,7 +192,8 @@ mod tests {
         {
             let estado = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
             {
-                let conn = estado.conn.lock().unwrap();
+                let guard = estado.conn.lock().unwrap();
+                let conn = guard.as_ref().unwrap();
                 conn.execute(
                     "INSERT INTO configuracion (clave, valor) VALUES ('test', 'valor')",
                     [],
@@ -187,7 +211,49 @@ mod tests {
         // Reabrir en un DbState nuevo (simula reiniciar la app): el dato debe
         // seguir ahí porque se descifra desde el `.enc`.
         let estado2 = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
-        let conn2 = estado2.conn.lock().unwrap();
+        let guard2 = estado2.conn.lock().unwrap();
+        let conn2 = guard2.as_ref().unwrap();
+        let valor: String = conn2
+            .query_row(
+                "SELECT valor FROM configuracion WHERE clave = 'test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(valor, "valor");
+    }
+
+    #[test]
+    fn sellar_y_cerrar_borra_la_copia_en_claro() {
+        let dir = tempdir().unwrap();
+        let estado = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
+        {
+            let guard = estado.conn.lock().unwrap();
+            let conn = guard.as_ref().unwrap();
+            conn.execute(
+                "INSERT INTO configuracion (clave, valor) VALUES ('test', 'valor')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let ruta_plana = dir.path().join(NOMBRE_BD_PLANA);
+        assert!(ruta_plana.exists(), "la copia en claro debia existir mientras la app corre");
+
+        estado.sellar_y_cerrar().unwrap();
+
+        assert!(!ruta_plana.exists(), "la copia en claro no debe sobrevivir a un cierre normal");
+
+        // El mutex queda en None: cualquier intento de usar la conexion tras
+        // el cierre debe fallar, no operar en silencio.
+        let guard = estado.conn.lock().unwrap();
+        assert!(guard.is_none());
+        drop(guard);
+
+        // El dato sigue disponible en el .enc para la siguiente apertura.
+        let estado2 = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
+        let guard2 = estado2.conn.lock().unwrap();
+        let conn2 = guard2.as_ref().unwrap();
         let valor: String = conn2
             .query_row(
                 "SELECT valor FROM configuracion WHERE clave = 'test'",

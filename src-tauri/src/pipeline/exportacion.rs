@@ -282,7 +282,8 @@ mod tests {
     fn exporta_solo_entregas_con_nota_confirmada_y_resuelve_el_nombre_real() {
         let dir_bd = tempdir().unwrap();
         let estado = schema::abrir_con_clave(dir_bd.path(), [6u8; 32]).unwrap();
-        let conn = estado.conn.lock().unwrap();
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
 
         conn.execute(
             "INSERT INTO rubricas (titulo, asignatura, curso, contenido_json) VALUES ('t','a','c','{}')",
@@ -311,13 +312,13 @@ mod tests {
         )
         .unwrap();
         let entrega1 = conn.last_insert_rowid();
-        anonimizacion::confirmar(&conn, entrega1, &[], "Maria Real", None).unwrap();
+        anonimizacion::confirmar(conn, entrega1, &[], "Maria Real", None).unwrap();
         conn.execute(
             "INSERT INTO resultados (entrega_id, criterio_id, puntuacion_final) VALUES (?1, ?2, 8.5)",
             rusqlite::params![entrega1, criterio_id],
         )
         .unwrap();
-        revision::confirmar_nota(&conn, entrega1).unwrap();
+        revision::confirmar_nota(conn, entrega1).unwrap();
 
         // Entrega 2: aún no confirmada, NO debe aparecer en el CSV.
         conn.execute(
@@ -326,7 +327,7 @@ mod tests {
         )
         .unwrap();
         let entrega2 = conn.last_insert_rowid();
-        anonimizacion::confirmar(&conn, entrega2, &[], "Otro Alumno", None).unwrap();
+        anonimizacion::confirmar(conn, entrega2, &[], "Otro Alumno", None).unwrap();
         conn.execute(
             "INSERT INTO resultados (entrega_id, criterio_id, puntuacion_final) VALUES (?1, ?2, 2.0)",
             rusqlite::params![entrega2, criterio_id],
@@ -335,7 +336,7 @@ mod tests {
 
         let dir_csv = tempdir().unwrap();
         let ruta_csv = dir_csv.path().join("notas.csv");
-        let filas = generar_csv(&conn, enunciado_id, &ruta_csv).unwrap();
+        let filas = generar_csv(conn, enunciado_id, &ruta_csv).unwrap();
         assert_eq!(filas, 1);
 
         let contenido = std::fs::read_to_string(&ruta_csv).unwrap();
@@ -348,7 +349,8 @@ mod tests {
     fn genera_pdf_de_feedback_con_contenido_esperado() {
         let dir_bd = tempdir().unwrap();
         let estado = schema::abrir_con_clave(dir_bd.path(), [12u8; 32]).unwrap();
-        let conn = estado.conn.lock().unwrap();
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
 
         conn.execute(
             "INSERT INTO rubricas (titulo, asignatura, curso, contenido_json) VALUES ('t','a','c','{}')",
@@ -375,14 +377,14 @@ mod tests {
         )
         .unwrap();
         let entrega_id = conn.last_insert_rowid();
-        anonimizacion::confirmar(&conn, entrega_id, &[], "Alumno PDF", None).unwrap();
+        anonimizacion::confirmar(conn, entrega_id, &[], "Alumno PDF", None).unwrap();
         conn.execute(
             "INSERT INTO resultados (entrega_id, criterio_id, puntuacion_final, comentario_docente)
              VALUES (?1, ?2, 7.0, 'buen trabajo')",
             rusqlite::params![entrega_id, criterio_id],
         )
         .unwrap();
-        revision::confirmar_nota(&conn, entrega_id).unwrap();
+        revision::confirmar_nota(conn, entrega_id).unwrap();
         conn.execute(
             "INSERT INTO logs_auditoria (entrega_id, evento, actor, payload_json)
              VALUES (?1, 'llamada_b_feedback', 'ia', ?2)",
@@ -399,7 +401,7 @@ mod tests {
         let dir_pdf = tempdir().unwrap();
         let ruta_pdf = dir_pdf.path().join("feedback.pdf");
 
-        generar_pdf_feedback(&conn, entrega_id, &ruta_fuente, &ruta_pdf).unwrap();
+        generar_pdf_feedback(conn, entrega_id, &ruta_fuente, &ruta_pdf).unwrap();
 
         let bytes = std::fs::read(&ruta_pdf).unwrap();
         assert!(bytes.starts_with(b"%PDF"), "el fichero generado no parece un PDF válido");
@@ -410,7 +412,8 @@ mod tests {
     fn exporta_el_log_de_auditoria_sin_nombres_reales() {
         let dir_bd = tempdir().unwrap();
         let estado = schema::abrir_con_clave(dir_bd.path(), [11u8; 32]).unwrap();
-        let conn = estado.conn.lock().unwrap();
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
 
         conn.execute(
             "INSERT INTO rubricas (titulo, asignatura, curso, contenido_json) VALUES ('t','a','c','{}')",
@@ -430,12 +433,12 @@ mod tests {
         )
         .unwrap();
         let entrega_id = conn.last_insert_rowid();
-        anonimizacion::confirmar(&conn, entrega_id, &[], "Nombre Que No Debe Salir", None).unwrap();
-        revision::confirmar_nota(&conn, entrega_id).unwrap();
+        anonimizacion::confirmar(conn, entrega_id, &[], "Nombre Que No Debe Salir", None).unwrap();
+        revision::confirmar_nota(conn, entrega_id).unwrap();
 
         let dir_csv = tempdir().unwrap();
         let ruta_csv = dir_csv.path().join("log.csv");
-        let filas = generar_csv_logs(&conn, None, &ruta_csv).unwrap();
+        let filas = generar_csv_logs(conn, None, &ruta_csv).unwrap();
         assert!(filas >= 2); // al menos anonimizacion_confirmada + nota_confirmada
 
         let contenido = std::fs::read_to_string(&ruta_csv).unwrap();

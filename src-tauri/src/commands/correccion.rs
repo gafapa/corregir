@@ -72,9 +72,10 @@ pub async fn cmd_invocar_evidencias(
     entrega_id: i64,
 ) -> Result<Vec<EvidenciaCriterio>, String> {
     let (texto_enunciado, criterios, confirmado) = {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        let (texto_enunciado, criterios) = enunciado_y_criterios(&conn, entrega_id)?;
-        let confirmado = anonimizacion::cargar_confirmado(&conn, entrega_id).map_err(|e| e.to_string())?;
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
+        let (texto_enunciado, criterios) = enunciado_y_criterios(conn, entrega_id)?;
+        let confirmado = anonimizacion::cargar_confirmado(conn, entrega_id).map_err(|e| e.to_string())?;
         (texto_enunciado, criterios, confirmado)
     };
 
@@ -90,9 +91,10 @@ pub async fn cmd_invocar_evidencias(
     .map_err(|e| e.to_string())?;
 
     {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
         for ev in &evidencias {
-            let criterio_id = id_de_criterio(&conn, entrega_id, &ev.criterio_id)?;
+            let criterio_id = id_de_criterio(conn, entrega_id, &ev.criterio_id)?;
             conn.execute(
                 "INSERT INTO resultados (entrega_id, criterio_id, evidencia_ia_json) VALUES (?1, ?2, ?3)
                  ON CONFLICT(entrega_id, criterio_id) DO UPDATE SET evidencia_ia_json = excluded.evidencia_ia_json",
@@ -136,9 +138,10 @@ pub fn cmd_guardar_nota_tentativa(
     evaluaciones: Vec<EvaluacionCriterio>,
 ) -> Result<(), String> {
     {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
         for ev in evaluaciones {
-            let criterio_id = id_de_criterio(&conn, entrega_id, &ev.criterio_id)?;
+            let criterio_id = id_de_criterio(conn, entrega_id, &ev.criterio_id)?;
             conn.execute(
                 "INSERT INTO resultados (entrega_id, criterio_id, puntuacion_final, comentario_docente)
                  VALUES (?1, ?2, ?3, ?4)
@@ -162,9 +165,10 @@ pub async fn cmd_invocar_feedback(
     entrega_id: i64,
 ) -> Result<FeedbackYConsistencia, String> {
     let (texto_enunciado, criterios, confirmado, evaluacion_docente) = {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
-        let (texto_enunciado, criterios) = enunciado_y_criterios(&conn, entrega_id)?;
-        let confirmado = anonimizacion::cargar_confirmado(&conn, entrega_id).map_err(|e| e.to_string())?;
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
+        let (texto_enunciado, criterios) = enunciado_y_criterios(conn, entrega_id)?;
+        let confirmado = anonimizacion::cargar_confirmado(conn, entrega_id).map_err(|e| e.to_string())?;
 
         let mut stmt = conn
             .prepare(
@@ -195,7 +199,8 @@ pub async fn cmd_invocar_feedback(
     .map_err(|e| e.to_string())?;
 
     {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
         conn.execute(
             "INSERT INTO logs_auditoria (entrega_id, evento, actor, version_modelo, payload_json)
              VALUES (?1, 'llamada_b_feedback', 'ia', ?2, ?3)",

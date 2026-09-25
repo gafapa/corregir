@@ -11,7 +11,8 @@ pub fn cmd_crear_enunciado(
     materiales_ref: Option<String>,
 ) -> Result<i64, String> {
     let id = {
-        let conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
         conn.execute(
             "INSERT INTO enunciados (rubrica_id, texto, materiales_ref) VALUES (?1, ?2, ?3)",
             rusqlite::params![rubrica_id, texto, materiales_ref],
@@ -26,7 +27,8 @@ pub fn cmd_crear_enunciado(
 #[tauri::command]
 pub fn cmd_crear_rubrica(db: State<DbState>, rubrica: NuevaRubrica) -> Result<i64, String> {
     let rubrica_id = {
-        let mut conn = db.conn.lock().map_err(|e| e.to_string())?;
+        let mut guard = db.conn.lock().map_err(|e| e.to_string())?;
+        let conn = guard.as_mut().ok_or("la base de datos está cerrada")?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         let contenido_json = serde_json::to_string(&rubrica).map_err(|e| e.to_string())?;
@@ -64,7 +66,8 @@ pub fn cmd_crear_rubrica(db: State<DbState>, rubrica: NuevaRubrica) -> Result<i6
 
 #[tauri::command]
 pub fn cmd_listar_rubricas(db: State<DbState>) -> Result<Vec<RubricaConCriterios>, String> {
-    let conn = db.conn.lock().map_err(|e| e.to_string())?;
+    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
 
     let mut stmt_rubricas = conn
         .prepare("SELECT id, titulo, asignatura, curso, version FROM rubricas ORDER BY id")

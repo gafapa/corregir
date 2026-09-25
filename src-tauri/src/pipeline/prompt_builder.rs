@@ -157,7 +157,8 @@ mod tests {
         // lo dejamos "leak" deliberadamente, es un directorio temporal de test.
         let dir = Box::leak(Box::new(dir));
         let estado = schema::abrir_con_clave(dir.path(), [3u8; 32]).unwrap();
-        let conn = estado.conn.lock().unwrap();
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
         conn.execute(
             "INSERT INTO rubricas (titulo, asignatura, curso, contenido_json) VALUES ('t','a','c','{}')",
             [],
@@ -177,7 +178,7 @@ mod tests {
         .unwrap();
         let entrega_id = conn.last_insert_rowid();
 
-        super::super::anonimizacion::confirmar(&conn, entrega_id, &[], "Alumno de Prueba", None).unwrap()
+        super::super::anonimizacion::confirmar(conn, entrega_id, &[], "Alumno de Prueba", None).unwrap()
     }
 
     /// Hito 5, prueba de robustez obligatoria (no aplazable, ver

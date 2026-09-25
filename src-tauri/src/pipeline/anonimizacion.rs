@@ -180,16 +180,17 @@ mod tests {
     fn confirmar_redacta_y_persiste_el_alias() {
         let dir = tempdir().unwrap();
         let estado = schema::abrir_con_clave(dir.path(), [9u8; 32]).unwrap();
-        let conn = estado.conn.lock().unwrap();
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
 
         let texto = "Nombre: Maria Lopez. Respuesta: el poema trata de...";
-        let entrega_id = preparar_entrega_de_prueba(&conn, texto);
+        let entrega_id = preparar_entrega_de_prueba(conn, texto);
 
         // "Maria Lopez" está en offsets 8..19 (comprobado por construcción del texto).
         let inicio = texto.find("Maria Lopez").unwrap();
         let fin = inicio + "Maria Lopez".len();
 
-        let confirmado = confirmar(&conn, entrega_id, &[(inicio, fin)], "Maria Lopez", None).unwrap();
+        let confirmado = confirmar(conn, entrega_id, &[(inicio, fin)], "Maria Lopez", None).unwrap();
 
         assert!(!confirmado.texto().contains("Maria Lopez"));
         assert!(confirmado.texto().contains(confirmado.alias()));
@@ -210,11 +211,12 @@ mod tests {
     fn cargar_confirmado_falla_si_no_se_ha_confirmado_antes() {
         let dir = tempdir().unwrap();
         let estado = schema::abrir_con_clave(dir.path(), [9u8; 32]).unwrap();
-        let conn = estado.conn.lock().unwrap();
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
 
-        let entrega_id = preparar_entrega_de_prueba(&conn, "texto sin anonimizar todavia");
+        let entrega_id = preparar_entrega_de_prueba(conn, "texto sin anonimizar todavia");
 
-        let resultado = cargar_confirmado(&conn, entrega_id);
+        let resultado = cargar_confirmado(conn, entrega_id);
         assert!(matches!(resultado, Err(AnonimizacionError::NoAnonimizada(_))));
     }
 
@@ -222,12 +224,13 @@ mod tests {
     fn cargar_confirmado_funciona_tras_confirmar() {
         let dir = tempdir().unwrap();
         let estado = schema::abrir_con_clave(dir.path(), [9u8; 32]).unwrap();
-        let conn = estado.conn.lock().unwrap();
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
 
-        let entrega_id = preparar_entrega_de_prueba(&conn, "sin identificadores en este texto");
-        confirmar(&conn, entrega_id, &[], "Alumno Anonimo", None).unwrap();
+        let entrega_id = preparar_entrega_de_prueba(conn, "sin identificadores en este texto");
+        confirmar(conn, entrega_id, &[], "Alumno Anonimo", None).unwrap();
 
-        let recuperado = cargar_confirmado(&conn, entrega_id).unwrap();
+        let recuperado = cargar_confirmado(conn, entrega_id).unwrap();
         assert_eq!(recuperado.texto(), "sin identificadores en este texto");
     }
 }

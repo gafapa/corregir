@@ -39,7 +39,11 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Some(db) = window.app_handle().try_state::<db::DbState>() {
-                    let _ = db.sellar();
+                    // Cierra la conexión y borra la copia en claro del disco
+                    // (ver src-tauri/src/db/schema.rs) — no solo re-cifrarla.
+                    if let Err(e) = db.sellar_y_cerrar() {
+                        eprintln!("aviso: fallo al cerrar la base de datos de forma segura: {e}");
+                    }
                 }
             }
         })
