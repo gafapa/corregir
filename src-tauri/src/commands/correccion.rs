@@ -63,6 +63,35 @@ fn id_de_criterio(
     .map_err(|e| format!("criterio '{codigo}' no encontrado para la entrega {entrega_id}: {e}"))
 }
 
+/// Pura y sin acceso a BD para que sea trivial de testear: el HTML del
+/// input numérico en el frontend (`min`/`max`) es solo una ayuda visual, no
+/// una garantía — esta es la comprobación real.
+fn validar_puntuacion(puntuacion: f64, puntuacion_max: f64) -> Result<(), String> {
+    if (0.0..=puntuacion_max).contains(&puntuacion) {
+        Ok(())
+    } else {
+        Err(format!(
+            "puntuación fuera de rango: {puntuacion} (máximo {puntuacion_max})"
+        ))
+    }
+}
+
+fn id_y_max_de_criterio(
+    conn: &rusqlite::Connection,
+    entrega_id: i64,
+    codigo: &str,
+) -> Result<(i64, f64), String> {
+    conn.query_row(
+        "SELECT cr.id, cr.puntuacion_max FROM criterios_rubrica cr
+         JOIN enunciados e ON e.rubrica_id = cr.rubrica_id
+         JOIN entregas en ON en.enunciado_id = e.id
+         WHERE en.id = ?1 AND cr.codigo = ?2",
+        rusqlite::params![entrega_id, codigo],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .map_err(|e| format!("criterio '{codigo}' no encontrado para la entrega {entrega_id}: {e}"))
+}
+
 /// Llamada A (Hito 5): localizar evidencia por criterio, sin veredicto ni
 /// puntuación. Requiere que la entrega ya esté anonimizada y confirmada
 /// (`pipeline::anonimizacion::cargar_confirmado` lo garantiza).
@@ -140,8 +169,25 @@ pub fn cmd_guardar_nota_tentativa(
     {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
         let conn = guard.as_ref().ok_or("la base de datos está cerrada")?;
+
+        let estado_pipeline: String = conn
+            .query_row(
+                "SELECT estado_pipeline FROM entregas WHERE id = ?1",
+                [entrega_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if estado_pipeline == "nota_confirmada" {
+            return Err(
+                "la nota de esta entrega ya está confirmada; no se puede modificar desde aquí"
+                    .to_string(),
+            );
+        }
+
         for ev in evaluaciones {
-            let criterio_id = id_de_criterio(conn, entrega_id, &ev.criterio_id)?;
+            let (criterio_id, puntuacion_max) = id_y_max_de_criterio(conn, entrega_id, &ev.criterio_id)?;
+            validar_puntuacion(ev.puntuacion, puntuacion_max)
+                .map_err(|e| format!("{} : {e}", ev.criterio_id))?;
             conn.execute(
                 "INSERT INTO resultados (entrega_id, criterio_id, puntuacion_final, comentario_docente)
                  VALUES (?1, ?2, ?3, ?4)
@@ -215,4 +261,22 @@ pub async fn cmd_invocar_feedback(
     db.sellar().map_err(|e| e.to_string())?;
 
     Ok(feedback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validar_puntuacion_acepta_rango_valido() {
+        assert!(validar_puntuacion(0.0, 10.0).is_ok());
+        assert!(validar_puntuacion(10.0, 10.0).is_ok());
+        assert!(validar_puntuacion(4.5, 10.0).is_ok());
+    }
+
+    #[test]
+    fn validar_puntuacion_rechaza_fuera_de_rango() {
+        assert!(validar_puntuacion(-1.0, 10.0).is_err());
+        assert!(validar_puntuacion(10.1, 10.0).is_err());
+    }
 }

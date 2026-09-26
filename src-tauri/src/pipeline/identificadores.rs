@@ -229,4 +229,24 @@ mod tests {
         assert!(tipos.contains(&"dni"));
         assert!(tipos.contains(&"email"));
     }
+
+    /// Documenta que `detectar_todos` SÍ puede devolver candidatos solapados
+    /// (aquí, un email que contiene fragmentos de un nombre del roster) —
+    /// razón por la que `pipeline::anonimizacion::confirmar` tiene que
+    /// fusionar spans antes de redactar en vez de asumir que vienen
+    /// disjuntos. Ver anonimizacion::tests::confirmar_con_spans_solapados_no_corrompe_el_texto.
+    #[test]
+    fn detectar_todos_puede_devolver_candidatos_solapados() {
+        let texto = "Nombre: Maria Sintetica Lopez Ejemplo\nDNI: 12345678Z (ficticio)\n\
+                     Email: maria.sintetica.ejemplo@correo-falso.test\n\nRespuesta...";
+        let roster = vec!["Maria Sintetica Lopez Ejemplo".to_string()];
+        let candidatos = detectar_todos(texto, &roster);
+        let hay_solape = candidatos.iter().enumerate().any(|(i, a)| {
+            candidatos
+                .iter()
+                .enumerate()
+                .any(|(j, b)| i != j && a.inicio < b.fin && a.fin > b.inicio)
+        });
+        assert!(hay_solape, "se esperaba encontrar un solape real entre candidatos");
+    }
 }

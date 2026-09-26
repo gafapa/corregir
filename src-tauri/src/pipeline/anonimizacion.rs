@@ -58,14 +58,39 @@ fn generar_alias_unico(conn: &Connection) -> Result<String, AnonimizacionError> 
     }
 }
 
-/// Sustituye cada rango `(inicio, fin)` (offsets de byte, extremos válidos de
-/// carácter UTF-8) por `alias`. Se procesa de atrás hacia adelante para que
-/// un reemplazo no invalide los offsets de los siguientes.
-fn redactar(texto: &str, spans: &[(usize, usize)], alias: &str) -> String {
+/// Fusiona rangos solapados o adyacentes en rangos disjuntos que cubren la
+/// misma unión de posiciones. Imprescindible antes de redactar: los
+/// candidatos de `identificadores::detectar_todos` pueden solaparse de
+/// verdad (p. ej. un email que contiene un nombre del roster: "email"
+/// [71..112] y el fragmento de roster "sintetica" [77..86] están dentro de
+/// él), y aplicar reemplazos por posición sobre rangos solapados corrompe
+/// el resultado en silencio en vez de fallar — se detectó revisando la app
+/// con los propios datos sintéticos de prueba.
+fn fusionar_spans(spans: &[(usize, usize)]) -> Vec<(usize, usize)> {
     let mut ordenados: Vec<(usize, usize)> = spans.to_vec();
-    ordenados.sort_by_key(|s| std::cmp::Reverse(s.0));
-    let mut resultado = texto.to_string();
+    ordenados.sort_by_key(|s| s.0);
+    let mut fusionados: Vec<(usize, usize)> = Vec::new();
     for (inicio, fin) in ordenados {
+        match fusionados.last_mut() {
+            Some(ultimo) if inicio <= ultimo.1 => {
+                ultimo.1 = ultimo.1.max(fin);
+            }
+            _ => fusionados.push((inicio, fin)),
+        }
+    }
+    fusionados
+}
+
+/// Sustituye cada rango `(inicio, fin)` (offsets de byte, extremos válidos de
+/// carácter UTF-8) por `alias`. Los rangos se fusionan primero (ver
+/// `fusionar_spans`) para que sean disjuntos, y luego se procesan de atrás
+/// hacia adelante para que un reemplazo no invalide los offsets de los
+/// siguientes.
+fn redactar(texto: &str, spans: &[(usize, usize)], alias: &str) -> String {
+    let mut fusionados = fusionar_spans(spans);
+    fusionados.sort_by_key(|s| std::cmp::Reverse(s.0));
+    let mut resultado = texto.to_string();
+    for (inicio, fin) in fusionados {
         resultado.replace_range(inicio..fin, alias);
     }
     resultado
@@ -232,5 +257,52 @@ mod tests {
 
         let recuperado = cargar_confirmado(conn, entrega_id).unwrap();
         assert_eq!(recuperado.texto(), "sin identificadores en este texto");
+    }
+
+    /// Regresión: `identificadores::detectar_todos` puede devolver candidatos
+    /// solapados de verdad (un email que contiene fragmentos de un nombre del
+    /// roster — ver pipeline::identificadores::tests::
+    /// diagnostico_solapamiento_email_vs_roster para los spans exactos).
+    /// Antes de fusionar_spans, esto corrompía el texto anonimizado en
+    /// silencio (dejaba fragmentos de alias mezclados, p. ej.
+    /// "maria.sintetica.ejemplo@..." quedaba como "d1f79bc5bc5" en vez de
+    /// redactarse limpiamente).
+    #[test]
+    fn confirmar_con_spans_solapados_no_corrompe_el_texto() {
+        let dir = tempdir().unwrap();
+        let estado = schema::abrir_con_clave(dir.path(), [13u8; 32]).unwrap();
+        let guard = estado.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
+
+        let texto = "Nombre: Maria Sintetica Lopez Ejemplo\nDNI: 12345678Z (ficticio)\n\
+                     Email: maria.sintetica.ejemplo@correo-falso.test\n\nRespuesta...";
+        let entrega_id = preparar_entrega_de_prueba(conn, texto);
+
+        // Spans reales detectados por identificadores::detectar_todos para este
+        // mismo texto: el email [71..112] solapa con los fragmentos de roster
+        // "sintetica" [77..86] y "ejemplo" [87..94], y comparte inicio con
+        // "maria" [71..76].
+        let spans = vec![(8, 37), (43, 52), (71, 112), (71, 76), (77, 86), (87, 94)];
+
+        let confirmado =
+            confirmar(conn, entrega_id, &spans, "Maria Sintetica Lopez Ejemplo", None).unwrap();
+        let texto_final = confirmado.texto();
+
+        assert!(texto_final.contains("Respuesta..."), "no debe tocar texto fuera de los spans");
+        assert!(
+            !texto_final.contains("maria.sintetica.ejemplo"),
+            "el email no debe sobrevivir de ninguna forma: {texto_final}"
+        );
+        assert!(
+            !texto_final.contains("correo-falso.test"),
+            "el dominio del email no debe sobrevivir: {texto_final}"
+        );
+        // Cada aparición del alias debe tener exactamente 8 caracteres hex,
+        // nunca fragmentos pegados de un reemplazo solapado mal resuelto.
+        for aparicion in texto_final.match_indices(confirmado.alias()) {
+            let siguiente = texto_final.as_bytes().get(aparicion.0 + confirmado.alias().len());
+            let es_hex_extra = siguiente.is_some_and(|b| b.is_ascii_hexdigit());
+            assert!(!es_hex_extra, "alias con cola pegada (solape mal resuelto): {texto_final}");
+        }
     }
 }
