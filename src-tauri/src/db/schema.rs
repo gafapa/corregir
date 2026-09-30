@@ -1,279 +1,297 @@
-//! Base de datos local. **Nota de diseño (Hito 2):** el plan original preveía
-//! SQLCipher (cifrado continuo a nivel de página). Se descartó en esta
-//! implementación porque `bundled-sqlcipher-vendored-openssl` requiere
-//! compilar OpenSSL desde fuente, lo que exige un Perl completo (con
-//! `Locale::Maketext::Simple`) no disponible con el Perl mínimo de Git Bash
-//! en Windows. Exigir instalar Strawberry Perl solo para compilar la app
-//! introduce justo el tipo de dependencia frágil que este proyecto quiere
-//! evitar (ver ARQUITECTURA.md).
-//!
-//! En su lugar: SQLite normal (`rusqlite` con feature `bundled`, sin
-//! OpenSSL) + **cifrado de sobre a nivel de aplicación** con AES-256-GCM.
-//! El fichero en reposo (`corregir.sqlite.enc`) está siempre cifrado; al
-//! abrir la app se descifra a una copia de trabajo en claro
-//! (`corregir.sqlite`) en el mismo directorio, y se vuelve a cifrar
-//! (`sellar`) tras cada operación que escribe datos y al cerrar la
-//! aplicación.
-//!
-//! Actualizado 2026-09-25 (gap cerrado): el riesgo residual que habia aqui
-//! documentado -- que `sellar` no borraba la copia en claro al cerrar la
-//! app -- se cerro tras el visto bueno de direccion/DPO para avanzar hacia
-//! datos reales. `DbState.conn` es ahora `Mutex<Option<Connection>>`;
-//! `sellar_y_cerrar` cierra la conexion explicitamente (liberando el
-//! fichero en Windows) y sobrescribe/borra la copia en claro. Se invoca
-//! solo al recibir `CloseRequested` en `lib.rs`. Tras llamarlo, cualquier
-//! comando que intente `db.conn.lock()...as_ref()` fallara con un error
-//! claro en vez de silenciosamente operar sobre datos obsoletos -- eso es
-//! intencional: ningun comando debe ejecutarse tras el cierre.
-
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-
+//! SQLite lives in memory. Only authenticated encrypted snapshots reach disk.
+use crate::crypto::keychain::{self, KeychainError};
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
-use rusqlite::Connection;
+use fs2::FileExt;
+use rusqlite::{Connection, MAIN_DB};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
-use crate::crypto::keychain::{self, KeychainError};
-
-const MIGRACION_INICIAL: &str = include_str!("migrations/0001_init.sql");
-const NOMBRE_BD_PLANA: &str = "corregir.sqlite";
-const NOMBRE_BD_CIFRADA: &str = "corregir.sqlite.enc";
+const INITIAL_MIGRATION: &str = include_str!("migrations/0001_init.sql");
+const LEGACY_SCHEMA_MIGRATION: &str = include_str!("migrations/0002_legacy_names.sql");
+const STATE_MIGRATION: &str = include_str!("migrations/0003_workflow.sql");
+const ENCRYPTED_DB_NAME: &str = "corregir.sqlite.enc";
+const MAX_DATABASE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum DbError {
-    #[error("error de credenciales: {0}")]
+    #[error("credential error: {0}")]
     Keychain(#[from] KeychainError),
-    #[error("error de base de datos: {0}")]
+    #[error("database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
-    #[error("error de E/S en el fichero de base de datos: {0}")]
+    #[error("database file I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("passphrase con formato inesperado (no es hexadecimal de 32 bytes)")]
-    PassphraseInvalida,
-    #[error("no se pudo descifrar la base de datos (clave incorrecta o fichero corrupto)")]
-    DescifradoFallido,
-    #[error("mutex de la conexión envenenado (un hilo anterior entró en pánico mientras la tenía bloqueada)")]
-    MutexEnvenenado,
+    #[error("invalid passphrase format (expected 32 hexadecimal bytes)")]
+    InvalidPassphrase,
+    #[error("could not decrypt the database (wrong key or corrupt file)")]
+    DecryptionFailed,
+    #[error("database connection mutex poisoned by a previous panic")]
+    PoisonedMutex,
+    #[error("another instance is already using this data directory")]
+    AlreadyOpen,
+    #[error("database exceeds the 512 MiB safety limit or is corrupt")]
+    InvalidDatabase,
 }
 
-/// Estado gestionado por Tauri: conexión + lo necesario para volver a sellar
-/// (cifrar) la base de datos tras cada escritura. `conn` es `Option` para
-/// poder cerrarla explícitamente al salir (ver `sellar_y_cerrar`); una vez
-/// cerrada, es `None` y cualquier comando que la use falla con un mensaje
-/// claro en vez de operar sobre datos obsoletos.
 pub struct DbState {
     pub conn: Mutex<Option<Connection>>,
-    ruta_plana: PathBuf,
-    ruta_cifrada: PathBuf,
-    clave: [u8; 32],
+    pub directory: PathBuf,
+    path_encrypted: PathBuf,
+    key: Zeroizing<[u8; 32]>,
+    _directory_lock: File,
 }
 
 impl DbState {
-    /// Vuelve a cifrar el fichero en claro sobre el fichero `.enc`. Debe
-    /// llamarse tras cualquier comando que escriba datos. No cierra la
-    /// conexión ni toca la copia en claro (sigue en uso mientras la app
-    /// corre) -- para el cierre real de la app, usar `sellar_y_cerrar`.
-    pub fn sellar(&self) -> Result<(), DbError> {
-        let _guard = self.conn.lock().map_err(|_| DbError::MutexEnvenenado)?;
-        cifrar_a_disco(&self.ruta_plana, &self.ruta_cifrada, &self.clave)
+    pub fn seal(&self) -> Result<(), DbError> {
+        let guard = self.conn.lock().map_err(|_| DbError::PoisonedMutex)?;
+        if let Some(conn) = guard.as_ref() {
+            self.persist(conn)?;
+        }
+        Ok(())
     }
 
-    /// Sella una última vez, cierra la conexión de SQLite explícitamente
-    /// (liberando el fichero, imprescindible en Windows para poder tocarlo
-    /// después) y sobrescribe con ceros + borra la copia en claro. Debe
-    /// llamarse solo al cerrar la aplicación de verdad -- después de esto
-    /// ningún comando puede volver a usar `conn`.
-    pub fn sellar_y_cerrar(&self) -> Result<(), DbError> {
-        self.sellar()?;
+    pub fn persist(&self, conn: &Connection) -> Result<(), DbError> {
+        let data = conn.serialize(MAIN_DB)?;
+        if data.len() as u64 > MAX_DATABASE_BYTES {
+            return Err(DbError::InvalidDatabase);
+        }
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(self.key.as_ref()));
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let encrypted = cipher
+            .encrypt(&nonce, data.as_ref())
+            .map_err(|_| DbError::DecryptionFailed)?;
+        let mut snapshot = tempfile::NamedTempFile::new_in(&self.directory)?;
+        snapshot.write_all(&nonce)?;
+        snapshot.write_all(&encrypted)?;
+        snapshot.as_file().sync_all()?;
+        snapshot
+            .persist(&self.path_encrypted)
+            .map_err(|error| error.error)?;
+        Ok(())
+    }
 
-        let mut guard = self.conn.lock().map_err(|_| DbError::MutexEnvenenado)?;
+    pub fn seal_and_close(&self) -> Result<(), DbError> {
+        let mut guard = self.conn.lock().map_err(|_| DbError::PoisonedMutex)?;
+        if let Some(conn) = guard.as_ref() {
+            self.persist(conn)?;
+        }
         *guard = None;
-        drop(guard);
+        Ok(())
+    }
+}
 
-        if let Ok(metadata) = fs::metadata(&self.ruta_plana) {
-            let ceros = vec![0u8; metadata.len() as usize];
-            let _ = fs::write(&self.ruta_plana, ceros);
+fn derive_key(passphrase: &str) -> Result<[u8; 32], DbError> {
+    let bytes = Zeroizing::new(hex::decode(passphrase).map_err(|_| DbError::InvalidPassphrase)?);
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| DbError::InvalidPassphrase)
+}
+
+fn decrypt(path: &Path, key: &[u8; 32]) -> Result<Zeroizing<Vec<u8>>, DbError> {
+    if fs::metadata(path)?.len() > MAX_DATABASE_BYTES + 28 {
+        return Err(DbError::InvalidDatabase);
+    }
+    let content = fs::read(path)?;
+    if content.len() < 28 {
+        return Err(DbError::DecryptionFailed);
+    }
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    cipher
+        .decrypt(Nonce::from_slice(&content[..12]), &content[12..])
+        .map(Zeroizing::new)
+        .map_err(|_| DbError::DecryptionFailed)
+}
+
+pub fn open(directory: &Path) -> Result<DbState, DbError> {
+    let directory_lock = lock_directory(directory)?;
+    let passphrase = Zeroizing::new(keychain::load_passphrase(
+        !directory.join(ENCRYPTED_DB_NAME).exists(),
+    )?);
+    open_locked(directory, derive_key(&passphrase)?, directory_lock)
+}
+
+#[cfg(test)]
+pub fn open_with_key(directory: &Path, key: [u8; 32]) -> Result<DbState, DbError> {
+    let directory_lock = lock_directory(directory)?;
+    open_locked(directory, key, directory_lock)
+}
+
+fn lock_directory(directory: &Path) -> Result<File, DbError> {
+    fs::create_dir_all(directory)?;
+    let directory_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(directory.join("corregir.lock"))?;
+    directory_lock
+        .try_lock_exclusive()
+        .map_err(|_| DbError::AlreadyOpen)?;
+    Ok(directory_lock)
+}
+
+fn open_locked(directory: &Path, key: [u8; 32], directory_lock: File) -> Result<DbState, DbError> {
+    let path_encrypted = directory.join(ENCRYPTED_DB_NAME);
+    let mut conn = Connection::open_in_memory()?;
+    // Authenticate the existing snapshot before considering a legacy working copy.
+    if path_encrypted.exists() {
+        let data = decrypt(&path_encrypted, &key)?;
+        conn.deserialize_read_exact(MAIN_DB, data.as_slice(), data.len(), false)?;
+    }
+    let legacy_path = directory.join("corregir.sqlite");
+    if legacy_path.exists() {
+        if fs::metadata(&legacy_path)?.len() > MAX_DATABASE_BYTES {
+            return Err(DbError::InvalidDatabase);
         }
-        match fs::remove_file(&self.ruta_plana) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        // SQLite recovers committed legacy WAL/journal changes before the backup.
+        let legacy = Connection::open(&legacy_path)?;
+        let backup = rusqlite::backup::Backup::new(&legacy, &mut conn)?;
+        backup.run_to_completion(128, std::time::Duration::from_millis(5), None)?;
     }
-}
-
-fn derivar_clave(passphrase_hex: &str) -> Result<[u8; 32], DbError> {
-    let bytes = hex::decode(passphrase_hex).map_err(|_| DbError::PassphraseInvalida)?;
-    bytes.try_into().map_err(|_| DbError::PassphraseInvalida)
-}
-
-fn descifrar_a_disco(ruta_cifrada: &Path, ruta_plana: &Path, clave: &[u8; 32]) -> Result<(), DbError> {
-    let contenido = fs::read(ruta_cifrada)?;
-    if contenido.len() < 12 {
-        return Err(DbError::DescifradoFallido);
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA temp_store = MEMORY; PRAGMA journal_mode = MEMORY;")?;
+    let integrity: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        return Err(DbError::InvalidDatabase);
     }
-    let (nonce_bytes, texto_cifrado) = contenido.split_at(12);
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(clave));
-    let nonce = Nonce::from_slice(nonce_bytes);
-    let texto_plano = cipher
-        .decrypt(nonce, texto_cifrado)
-        .map_err(|_| DbError::DescifradoFallido)?;
-    fs::write(ruta_plana, texto_plano)?;
-    Ok(())
-}
-
-fn cifrar_a_disco(ruta_plana: &Path, ruta_cifrada: &Path, clave: &[u8; 32]) -> Result<(), DbError> {
-    let texto_plano = fs::read(ruta_plana)?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(clave));
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let texto_cifrado = cipher
-        .encrypt(&nonce, texto_plano.as_ref())
-        .map_err(|_| DbError::DescifradoFallido)?;
-
-    let mut salida = Vec::with_capacity(12 + texto_cifrado.len());
-    salida.extend_from_slice(&nonce);
-    salida.extend_from_slice(&texto_cifrado);
-
-    // Escritura atómica: nunca dejar el `.enc` a medio escribir.
-    let ruta_temporal = ruta_cifrada.with_extension("enc.tmp");
-    fs::write(&ruta_temporal, salida)?;
-    fs::rename(&ruta_temporal, ruta_cifrada)?;
-    Ok(())
-}
-
-/// Abre (o crea) la base de datos en `dir`, obteniendo la clave del keychain
-/// del sistema operativo. Punto de entrada real de la aplicación.
-pub fn abrir(dir: &Path) -> Result<DbState, DbError> {
-    let passphrase_hex = keychain::obtener_o_crear_passphrase()?;
-    let clave = derivar_clave(&passphrase_hex)?;
-    abrir_con_clave(dir, clave)
-}
-
-/// Igual que `abrir`, pero recibe la clave directamente en vez de leerla del
-/// keychain del sistema. Separado para que los tests no dependan del
-/// almacén de credenciales real del sistema operativo (evita tanto una
-/// fuente de "flakiness" por tests en paralelo compitiendo por la misma
-/// entrada, como escribir credenciales de prueba en el keychain real).
-pub fn abrir_con_clave(dir: &Path, clave: [u8; 32]) -> Result<DbState, DbError> {
-    let ruta_plana = dir.join(NOMBRE_BD_PLANA);
-    let ruta_cifrada = dir.join(NOMBRE_BD_CIFRADA);
-
-    if ruta_cifrada.exists() {
-        descifrar_a_disco(&ruta_cifrada, &ruta_plana, &clave)?;
+    let legacy_schema: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='rubricas')",
+        [],
+        |row| row.get(0),
+    )?;
+    if legacy_schema {
+        let tx = conn.transaction()?;
+        tx.execute_batch(LEGACY_SCHEMA_MIGRATION)?;
+        tx.commit()?;
     }
-
-    let conn = Connection::open(&ruta_plana)?;
-    conn.execute_batch(MIGRACION_INICIAL)?;
-
-    let estado = DbState {
+    conn.execute_batch(INITIAL_MIGRATION)?;
+    let has_revision: bool = conn
+        .prepare("PRAGMA table_info(submissions)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "grade_revision");
+    if !has_revision {
+        let tx = conn.transaction()?;
+        tx.execute_batch(STATE_MIGRATION)?;
+        tx.commit()?;
+    }
+    let state = DbState {
         conn: Mutex::new(Some(conn)),
-        ruta_plana,
-        ruta_cifrada,
-        clave,
+        directory: directory.to_path_buf(),
+        path_encrypted,
+        key: Zeroizing::new(key),
+        _directory_lock: directory_lock,
     };
-    // Sella de inmediato para que el artefacto cifrado exista desde el primer
-    // arranque, no solo tras la primera escritura de datos de usuario.
-    estado.sellar()?;
-    Ok(estado)
+    state.seal()?;
+    // Remove only obsolete application-owned plaintext files after durable migration.
+    for name in [
+        "corregir.sqlite",
+        "corregir.sqlite-journal",
+        "corregir.sqlite-wal",
+        "corregir.sqlite-shm",
+    ] {
+        match fs::remove_file(directory.join(name)) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    const CLAVE_DE_PRUEBA: [u8; 32] = [42u8; 32];
-
+    const KEY: [u8; 32] = [42; 32];
     #[test]
-    fn crea_sella_y_reabre_bd() {
-        let dir = tempdir().unwrap();
-
+    fn creates_seals_and_reopens_database_without_plaintext() {
+        let directory = tempdir().unwrap();
         {
-            let estado = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
+            let state = open_with_key(directory.path(), KEY).unwrap();
             {
-                let guard = estado.conn.lock().unwrap();
+                let guard = state.conn.lock().unwrap();
                 let conn = guard.as_ref().unwrap();
                 conn.execute(
-                    "INSERT INTO configuracion (clave, valor) VALUES ('test', 'valor')",
+                    "INSERT INTO configuration VALUES ('test','secret value')",
                     [],
                 )
                 .unwrap();
+                state.persist(conn).unwrap();
             }
-            estado.sellar().unwrap();
-            // Tras sellar, no debe quedar rastro legible del dato en el
-            // fichero cifrado (comprobación mínima de que no es texto plano).
-            let cifrado = fs::read(dir.path().join(NOMBRE_BD_CIFRADA)).unwrap();
-            let como_texto = String::from_utf8_lossy(&cifrado);
-            assert!(!como_texto.contains("valor"));
+            assert!(!directory.path().join("corregir.sqlite").exists());
+            assert!(!String::from_utf8_lossy(
+                &fs::read(directory.path().join(ENCRYPTED_DB_NAME)).unwrap()
+            )
+            .contains("secret value"));
         }
-
-        // Reabrir en un DbState nuevo (simula reiniciar la app): el dato debe
-        // seguir ahí porque se descifra desde el `.enc`.
-        let estado2 = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
-        let guard2 = estado2.conn.lock().unwrap();
-        let conn2 = guard2.as_ref().unwrap();
-        let valor: String = conn2
+        let state = open_with_key(directory.path(), KEY).unwrap();
+        let guard = state.conn.lock().unwrap();
+        let value: String = guard
+            .as_ref()
+            .unwrap()
             .query_row(
-                "SELECT valor FROM configuracion WHERE clave = 'test'",
+                "SELECT value FROM configuration WHERE key='test'",
                 [],
-                |row| row.get(0),
+                |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(valor, "valor");
+        assert_eq!(value, "secret value");
     }
-
     #[test]
-    fn sellar_y_cerrar_borra_la_copia_en_claro() {
-        let dir = tempdir().unwrap();
-        let estado = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
-        {
-            let guard = estado.conn.lock().unwrap();
-            let conn = guard.as_ref().unwrap();
-            conn.execute(
-                "INSERT INTO configuracion (clave, valor) VALUES ('test', 'valor')",
+    fn rejects_second_instance_and_releases_lock_on_drop() {
+        let directory = tempdir().unwrap();
+        let state = open_with_key(directory.path(), KEY).unwrap();
+        assert!(matches!(
+            open_with_key(directory.path(), KEY),
+            Err(DbError::AlreadyOpen)
+        ));
+        state.seal_and_close().unwrap();
+        state.seal_and_close().unwrap();
+        assert!(state.conn.lock().unwrap().is_none());
+        drop(state);
+        assert!(open_with_key(directory.path(), KEY).is_ok());
+    }
+    #[test]
+    fn rejects_wrong_key_without_creating_plaintext() {
+        let directory = tempdir().unwrap();
+        drop(open_with_key(directory.path(), KEY).unwrap());
+        assert!(matches!(
+            open_with_key(directory.path(), [7; 32]),
+            Err(DbError::DecryptionFailed)
+        ));
+        assert!(!directory.path().join("corregir.sqlite").exists());
+    }
+    #[test]
+    fn recovers_newer_legacy_working_copy_before_removing_it() {
+        let directory = tempdir().unwrap();
+        drop(open_with_key(directory.path(), KEY).unwrap());
+        let legacy = Connection::open(directory.path().join("corregir.sqlite")).unwrap();
+        legacy.execute_batch(INITIAL_MIGRATION).unwrap();
+        legacy
+            .execute(
+                "INSERT INTO configuration VALUES ('recovered','latest')",
                 [],
             )
             .unwrap();
-        }
-
-        let ruta_plana = dir.path().join(NOMBRE_BD_PLANA);
-        assert!(ruta_plana.exists(), "la copia en claro debia existir mientras la app corre");
-
-        estado.sellar_y_cerrar().unwrap();
-
-        assert!(!ruta_plana.exists(), "la copia en claro no debe sobrevivir a un cierre normal");
-
-        // El mutex queda en None: cualquier intento de usar la conexion tras
-        // el cierre debe fallar, no operar en silencio.
-        let guard = estado.conn.lock().unwrap();
-        assert!(guard.is_none());
-        drop(guard);
-
-        // El dato sigue disponible en el .enc para la siguiente apertura.
-        let estado2 = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
-        let guard2 = estado2.conn.lock().unwrap();
-        let conn2 = guard2.as_ref().unwrap();
-        let valor: String = conn2
+        drop(legacy);
+        let state = open_with_key(directory.path(), KEY).unwrap();
+        assert!(!directory.path().join("corregir.sqlite").exists());
+        let guard = state.conn.lock().unwrap();
+        let value: String = guard
+            .as_ref()
+            .unwrap()
             .query_row(
-                "SELECT valor FROM configuracion WHERE clave = 'test'",
+                "SELECT value FROM configuration WHERE key='recovered'",
                 [],
-                |row| row.get(0),
+                |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(valor, "valor");
-    }
-
-    #[test]
-    fn falla_con_clave_incorrecta() {
-        let dir = tempdir().unwrap();
-        let estado = abrir_con_clave(dir.path(), CLAVE_DE_PRUEBA).unwrap();
-        drop(estado);
-
-        let ruta_cifrada = dir.path().join(NOMBRE_BD_CIFRADA);
-        let ruta_plana = dir.path().join(NOMBRE_BD_PLANA);
-        let clave_incorrecta = [7u8; 32];
-        let resultado = descifrar_a_disco(&ruta_cifrada, &ruta_plana, &clave_incorrecta);
-        assert!(matches!(resultado, Err(DbError::DescifradoFallido)));
+        assert_eq!(value, "latest");
     }
 }

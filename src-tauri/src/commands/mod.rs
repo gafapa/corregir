@@ -1,7 +1,7 @@
-pub mod anonimizacion;
-pub mod configuracion;
-pub mod correccion;
-pub mod diagnostico;
-pub mod exportacion;
-pub mod ingesta;
-pub mod revision;
+pub mod configuration;
+pub mod diagnostics;
+pub mod export;
+pub mod grading;
+pub mod ingestion;
+pub mod redaction;
+pub mod review;

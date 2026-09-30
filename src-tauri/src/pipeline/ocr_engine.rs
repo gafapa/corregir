@@ -1,63 +1,59 @@
-//! OCR local (Hito 3). Usa `ocrs`, un motor de OCR puro Rust (vía el
-//! runtime `rten`) en vez de Tesseract: evita depender de un binario nativo
-//! externo que habría que descargar/instalar/bundlear por separado (el mismo
-//! tipo de fricción de toolchain que ya obligó a cambiar de SQLCipher a
-//! cifrado a nivel de aplicación en Hito 2 — ver db/schema.rs). Los pesos
-//! del modelo (`.rten`, ~12 MB en total) se distribuyen con la app en
-//! `resources/models/ocr/`.
+//! Local OCR (Milestone 3). Uses the pure Rust `ocrs` engine and `rten`
+//! runtime, avoiding a separate native OCR executable. Model weights are
+//! bundled in `resources/models/ocr/`.
 
 use std::path::Path;
 
 use image::RgbImage;
-use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
+use ocrs::{ImageSource, OcrEngine as OcrsEngine, OcrEngineParams};
 use rten::Model;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum OcrError {
-    #[error("no se pudo cargar el modelo de OCR '{0}': {1}")]
-    Modelo(String, String),
-    #[error("error del motor de OCR: {0}")]
-    Motor(String),
+    #[error("could not load OCR model '{0}': {1}")]
+    Model(String, String),
+    #[error("error of the engine of OCR: {0}")]
+    Engine(String),
 }
 
-pub struct MotorOcr {
-    engine: OcrEngine,
+pub struct OcrEngine {
+    engine: OcrsEngine,
 }
 
-impl MotorOcr {
-    pub fn cargar(dir_modelos: &Path) -> Result<Self, OcrError> {
-        let ruta_deteccion = dir_modelos.join("text-detection.rten");
-        let deteccion = Model::load_file(&ruta_deteccion)
-            .map_err(|e| OcrError::Modelo(ruta_deteccion.display().to_string(), e.to_string()))?;
+impl OcrEngine {
+    pub fn load(directory_models: &Path) -> Result<Self, OcrError> {
+        let detection_path = directory_models.join("text-detection.rten");
+        let detection_model = Model::load_file(&detection_path)
+            .map_err(|e| OcrError::Model(detection_path.display().to_string(), e.to_string()))?;
 
-        let ruta_reconocimiento = dir_modelos.join("text-recognition.rten");
-        let reconocimiento = Model::load_file(&ruta_reconocimiento)
-            .map_err(|e| OcrError::Modelo(ruta_reconocimiento.display().to_string(), e.to_string()))?;
+        let recognition_path = directory_models.join("text-recognition.rten");
+        let recognition_model = Model::load_file(&recognition_path)
+            .map_err(|e| OcrError::Model(recognition_path.display().to_string(), e.to_string()))?;
 
-        let engine = OcrEngine::new(OcrEngineParams {
-            detection_model: Some(deteccion),
-            recognition_model: Some(reconocimiento),
+        let engine = OcrsEngine::new(OcrEngineParams {
+            detection_model: Some(detection_model),
+            recognition_model: Some(recognition_model),
             ..Default::default()
         })
-        .map_err(|e| OcrError::Motor(e.to_string()))?;
+        .map_err(|e| OcrError::Engine(e.to_string()))?;
 
         Ok(Self { engine })
     }
 
-    /// Reconoce el texto de una imagen en RGB. Se usa tanto para páginas de
-    /// PDF rasterizadas (sin capa de texto) como para capturas/fotos
-    /// entregadas directamente por el alumno.
-    pub fn reconocer_imagen(&self, imagen: &RgbImage) -> Result<String, OcrError> {
-        let fuente = ImageSource::from_bytes(imagen.as_raw(), imagen.dimensions())
-            .map_err(|e| OcrError::Motor(e.to_string()))?;
-        let entrada = self
+    /// Recognizes the text of an RGB image. It is used both for pages of
+    /// rasterized PDFs (without text layer) and for direct captures/photos
+    /// provided by the student.
+    pub fn recognize_image(&self, image: &RgbImage) -> Result<String, OcrError> {
+        let source = ImageSource::from_bytes(image.as_raw(), image.dimensions())
+            .map_err(|e| OcrError::Engine(e.to_string()))?;
+        let input = self
             .engine
-            .prepare_input(fuente)
-            .map_err(|e| OcrError::Motor(e.to_string()))?;
+            .prepare_input(source)
+            .map_err(|e| OcrError::Engine(e.to_string()))?;
         self.engine
-            .get_text(&entrada)
-            .map_err(|e| OcrError::Motor(e.to_string()))
+            .get_text(&input)
+            .map_err(|e| OcrError::Engine(e.to_string()))
     }
 }
 
@@ -67,46 +63,44 @@ mod tests {
     use crate::pipeline::render;
     use std::path::PathBuf;
 
-    fn dir_modelos() -> PathBuf {
+    fn directory_models() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/models/ocr")
     }
 
-    fn dir_pdfium() -> PathBuf {
+    fn directory_pdfium() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/pdfium/bin")
     }
 
-    fn dir_synthetic_data() -> PathBuf {
+    fn directory_synthetic_data() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .join("synthetic-data")
     }
 
-    /// Hito 3, verificación end-to-end: rasteriza el PDF sintético
-    /// "escaneado" (sin capa de texto) y confirma que el OCR recupera texto
-    /// reconocible del contenido real (no solo que "no crashea").
+    /// Milestone 3: verify OCR on a synthetic scanned PDF without a text layer.
     #[test]
-    fn reconoce_texto_de_pdf_escaneado() {
-        let motor = MotorOcr::cargar(&dir_modelos()).expect("modelos de OCR deben cargar");
-        let paginas = render::procesar_pdf(
-            &dir_pdfium(),
-            &dir_synthetic_data().join("lengua-alumno2-escaneado.pdf"),
+    fn recognizes_text_in_scanned_pdf() {
+        let engine = OcrEngine::load(&directory_models()).expect("OCR models should load");
+        let pages = render::process_pdf(
+            &directory_pdfium(),
+            &directory_synthetic_data().join("language-student-2-scanned.pdf"),
         )
         .unwrap();
 
-        let imagen = match &paginas[0] {
-            render::ContenidoPagina::ImagenParaOcr(img) => img,
-            _ => panic!("se esperaba una imagen rasterizada"),
+        let image = match &pages[0] {
+            render::PageContent::ImageForOcr(img) => img,
+            _ => panic!("expected a rasterized image"),
         };
 
-        let texto = motor.reconocer_imagen(imagen).unwrap();
-        let texto_normalizado = texto.to_lowercase();
-        // No exigimos exactitud perfecta del motor de OCR (razonable en un
-        // modelo pequeño de propósito general), pero sí que reconozca
-        // fragmentos clave del contenido real de la entrega.
+        let text = engine.recognize_image(image).unwrap();
+        let normalized_text = text.to_lowercase();
+        // We do not require perfect accuracy from the OCR engine (reasonable in a
+        // small general-purpose model), but it must recognize
+        // key fragments of the real content of the submission.
         assert!(
-            texto_normalizado.contains("respuesta") || texto_normalizado.contains("poema"),
-            "texto OCR no contiene fragmentos esperados: {texto}"
+            normalized_text.contains("student") || normalized_text.contains("poem"),
+            "OCR text did not contain expected fragments: {text}"
         );
     }
 }

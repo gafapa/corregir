@@ -1,7 +1,7 @@
 [package]
 name = "tauri-app"
 version = "0.1.0"
-description = "A Tauri App"
+description = "Local teacher-reviewed grading assistant"
 authors = ["you"]
 edition = "2021"
 
@@ -16,33 +16,36 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+sha2 = "0.10"
+serde_json = "1"
 
-[dev-dependencies]
-tempfile = "3"
 
 [dependencies]
+tempfile = "3"
 tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 thiserror = "2"
 url = "2"
-rusqlite = { version = "0.32", features = ["bundled"] }
-keyring = { version = "3", features = ["windows-native"] }
-rand = "0.8"
+rusqlite = { version = "0.40", features = ["bundled", "serialize", "backup"] }
+keyring = { version = "4.2", features = ["v1"] }
+rand = "0.10"
+fs2 = "0.4"
+zeroize = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 aes-gcm = "0.10"
 hex = "0.4"
-pdfium-render = "0.8"
+pdfium-render = "0.9"
 ocrs = "0.13"
 rten = "0.26"
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 regex = "1"
 csv = "1"
-printpdf = "0.12"
+lopdf = "0.45"
+skrifa = "0.47"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -52,3 +55,17 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# Neural inference is prohibitively slow without optimized kernels in debug builds.
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-imageproc]
+opt-level = 3

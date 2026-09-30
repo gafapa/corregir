@@ -12,13 +12,14 @@
   "app": {
     "windows": [
       {
-        "title": "Corregir — Asistente de corrección (Fase A, datos sintéticos)",
+        "title": "Corregir \u2014 Grading Assistant (Phase A, synthetic data)",
         "width": 1100,
         "height": 750
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; object-src 'none'; base-uri 'none'; frame-src 'none'"
     }
   },
   "bundle": {
@@ -35,7 +36,15 @@
       "resources/pdfium/bin/pdfium.dll": "pdfium/bin/pdfium.dll",
       "resources/models/ocr/text-detection.rten": "models/ocr/text-detection.rten",
       "resources/models/ocr/text-recognition.rten": "models/ocr/text-recognition.rten",
-      "resources/fonts/Roboto-Regular.ttf": "fonts/Roboto-Regular.ttf"
+      "resources/fonts/Roboto-Regular.ttf": "fonts/Roboto-Regular.ttf",
+      "resources/manifest.json": "manifest.json",
+      "resources/THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md",
+      "resources/pdfium/LICENSE": "pdfium/LICENSE",
+      "resources/pdfium/VERSION": "pdfium/VERSION",
+      "resources/pdfium/licenses/": "pdfium/licenses/",
+      "resources/fonts/LICENSE.txt": "fonts/LICENSE.txt",
+      "resources/models/ocr/MODEL-CARD.md": "models/ocr/MODEL-CARD.md",
+      "resources/models/ocr/LICENSE.txt": "models/ocr/LICENSE.txt"
     }
   }
 }

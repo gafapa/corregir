@@ -1,69 +1,108 @@
 mod commands;
 mod crypto;
 mod db;
-mod modelos;
+mod models;
 mod pipeline;
-mod recursos;
+mod resources;
+mod tasks;
 
-use tauri::Manager;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{Emitter, Manager};
 
-use commands::anonimizacion::{cmd_confirmar_anonimizacion, cmd_detectar_identificadores};
-use commands::configuracion::{cmd_crear_enunciado, cmd_crear_rubrica, cmd_listar_rubricas};
-use commands::correccion::{cmd_guardar_nota_tentativa, cmd_invocar_evidencias, cmd_invocar_feedback};
-use commands::diagnostico::cmd_probar_conexion_ia;
-use commands::exportacion::{
-    cmd_exportar_csv, cmd_exportar_logs_csv, cmd_exportar_pdf_feedback, cmd_listar_logs_auditoria,
+#[derive(Default)]
+struct ClosingState(AtomicBool);
+
+use commands::configuration::{
+    cmd_create_assignment, cmd_create_rubric, cmd_list_assignments, cmd_list_rubrics,
 };
-use commands::ingesta::{cmd_importar_entrega, cmd_listar_entregas};
-use commands::revision::cmd_confirmar_nota;
-use pipeline::ocr_engine::MotorOcr;
+use commands::diagnostics::cmd_test_ai_connection;
+use commands::export::{
+    cmd_export_csv, cmd_export_logs_csv, cmd_export_pdf_feedback, cmd_list_logs_audit,
+};
+use commands::grading::{
+    cmd_load_grading_state, cmd_request_evidence, cmd_request_feedback, cmd_save_grade_tentative,
+};
+use commands::ingestion::{cmd_cancel_import, cmd_import_submission, cmd_list_submissions};
+use commands::redaction::{cmd_confirm_redaction, cmd_detect_identifiers};
+use commands::review::cmd_confirm_grade;
+use pipeline::ocr_engine::OcrEngine;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&dir)?;
-            let estado_db = db::schema::abrir(&dir)
-                .map_err(|e| format!("no se pudo abrir la base de datos local: {e}"))?;
-            app.manage(estado_db);
+            let directory = if cfg!(debug_assertions) {
+                match std::env::var_os("CORREGIR_DEV_DATA_DIR") {
+                    Some(path) => {
+                        let path = std::path::PathBuf::from(path);
+                        if !path.is_absolute() {
+                            return Err("CORREGIR_DEV_DATA_DIR must be an absolute path".into());
+                        }
+                        path
+                    }
+                    None => app.path().app_data_dir()?,
+                }
+            } else {
+                app.path().app_data_dir()?
+            };
+            std::fs::create_dir_all(&directory)?;
+            let db_state = db::schema::open(&directory)
+                .map_err(|e| format!("could not open the local database: {e}"))?;
+            app.manage(std::sync::Arc::new(db_state));
 
-            let motor_ocr = MotorOcr::cargar(&recursos::dir_modelos_ocr(&app.handle()))
-                .map_err(|e| format!("no se pudieron cargar los modelos de OCR: {e}"))?;
-            app.manage(motor_ocr);
+            let ocr_engine = OcrEngine::load(&resources::directory_models_ocr(&app.handle()))
+                .map_err(|e| format!("could not load OCR models: {e}"))?;
+            app.manage(std::sync::Arc::new(ocr_engine));
+            app.manage(std::sync::Arc::new(
+                commands::ingestion::ImportJobs::default(),
+            ));
 
+            app.manage(ClosingState::default());
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if let Some(db) = window.app_handle().try_state::<db::DbState>() {
-                    // Cierra la conexión y borra la copia en claro del disco
-                    // (ver src-tauri/src/db/schema.rs) — no solo re-cifrarla.
-                    if let Err(e) = db.sellar_y_cerrar() {
-                        eprintln!("aviso: fallo al cerrar la base de datos de forma segura: {e}");
-                    }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let app = window.app_handle().clone();
+                let closing = app.state::<ClosingState>();
+                if closing.0.swap(true, Ordering::SeqCst) {
+                    return;
                 }
+                let db = app.state::<std::sync::Arc<db::DbState>>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = tauri::async_runtime::spawn_blocking(move || db.seal_and_close()).await;
+                    match result {
+                        Ok(Ok(())) => app.exit(0),
+                        _ => {
+                            app.state::<ClosingState>().0.store(false, Ordering::SeqCst);
+                            let _ = app.emit("database-close-error", "Could not save the encrypted database. Free disk space and try closing again.");
+                            eprintln!("warning: encrypted database close failed; the application remains open");
+                        }
+                    }
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![
-            cmd_probar_conexion_ia,
-            cmd_crear_rubrica,
-            cmd_listar_rubricas,
-            cmd_crear_enunciado,
-            cmd_importar_entrega,
-            cmd_listar_entregas,
-            cmd_detectar_identificadores,
-            cmd_confirmar_anonimizacion,
-            cmd_invocar_evidencias,
-            cmd_guardar_nota_tentativa,
-            cmd_invocar_feedback,
-            cmd_confirmar_nota,
-            cmd_exportar_csv,
-            cmd_exportar_logs_csv,
-            cmd_exportar_pdf_feedback,
-            cmd_listar_logs_auditoria,
+            cmd_test_ai_connection,
+            cmd_create_rubric,
+            cmd_list_rubrics,
+            cmd_list_assignments,
+            cmd_load_grading_state,
+            cmd_create_assignment,
+            cmd_import_submission,
+            cmd_cancel_import,
+            cmd_list_submissions,
+            cmd_detect_identifiers,
+            cmd_confirm_redaction,
+            cmd_request_evidence,
+            cmd_save_grade_tentative,
+            cmd_request_feedback,
+            cmd_confirm_grade,
+            cmd_export_csv,
+            cmd_export_logs_csv,
+            cmd_export_pdf_feedback,
+            cmd_list_logs_audit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

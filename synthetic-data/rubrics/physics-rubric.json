@@ -1,0 +1,22 @@
+{
+  "title": "Constant acceleration: speed and distance",
+  "subject": "Physics and chemistry",
+  "grade_level": "Year 10",
+  "criteria": [
+    {
+      "code": "C1",
+      "description": "Selects the correct constant acceleration formulas.",
+      "score_max": 3
+    },
+    {
+      "code": "C2",
+      "description": "Substitutes values and calculates without arithmetic errors.",
+      "score_max": 4
+    },
+    {
+      "code": "C3",
+      "description": "Uses correct units and interprets the result.",
+      "score_max": 3
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install pnpm
+        run: npm install --global pnpm@10.12.4
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify resources
+        run: pnpm verify:resources
+      - name: Test frontend
+        run: pnpm test
+      - name: Build frontend
+        run: pnpm build
+      - name: Audit JavaScript dependencies
+        run: pnpm audit
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+      - name: Test backend including OCR
+        working-directory: src-tauri
+        run: cargo test --lib --locked
+      - name: Install Rust audit tool
+        run: cargo install cargo-audit --locked
+      - name: Audit Rust dependencies
+        working-directory: src-tauri
+        run: cargo audit

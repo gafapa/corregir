@@ -1,0 +1,22 @@
+{
+  "title": "Poem analysis",
+  "subject": "Language and literature",
+  "grade_level": "Year 8",
+  "criteria": [
+    {
+      "code": "C1",
+      "description": "Correctly identifies the main theme.",
+      "score_max": 4
+    },
+    {
+      "code": "C2",
+      "description": "Identifies and explains at least two literary devices with textual examples.",
+      "score_max": 3
+    },
+    {
+      "code": "C3",
+      "description": "Coherence and clarity of expression.",
+      "score_max": 3
+    }
+  ]
+}

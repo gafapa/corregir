@@ -1,85 +1,79 @@
--- Esquema inicial (Hito 2). Ver docs/ARQUITECTURA.md para el diseño completo
--- del pipeline y docs/DPIA-EIPD.md para las razones de cada medida de
--- minimización (p. ej. por qué los documentos originales no viven aquí).
+-- Initial schema (Milestone 2). See docs/ARCHITECTURE.md for the full design of the pipeline and docs/DPIA-FRIA.md for the reasons of each minimization measure (e.g. why the original documents do not live here).
 
-CREATE TABLE IF NOT EXISTS rubricas (
+CREATE TABLE IF NOT EXISTS rubrics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    titulo TEXT NOT NULL,
-    asignatura TEXT NOT NULL,
-    curso TEXT NOT NULL,
+    title TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    grade_level TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
-    contenido_json TEXT NOT NULL,
-    creado_en TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    content_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE TABLE IF NOT EXISTS criterios_rubrica (
+CREATE TABLE IF NOT EXISTS criteria_rubric (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    rubrica_id INTEGER NOT NULL REFERENCES rubricas(id) ON DELETE CASCADE,
-    codigo TEXT NOT NULL,
-    descripcion TEXT NOT NULL,
-    puntuacion_max REAL NOT NULL,
-    orden INTEGER NOT NULL
+    rubric_id INTEGER NOT NULL REFERENCES rubrics(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    description TEXT NOT NULL,
+    score_max REAL NOT NULL,
+    sort_order INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS enunciados (
+CREATE TABLE IF NOT EXISTS assignments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    rubrica_id INTEGER NOT NULL REFERENCES rubricas(id) ON DELETE CASCADE,
-    texto TEXT NOT NULL,
-    materiales_ref TEXT
+    rubric_id INTEGER NOT NULL REFERENCES rubrics(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    materials_ref TEXT
 );
 
--- Los documentos originales NUNCA se guardan aquí (ver ARQUITECTURA.md,
--- "frontera de privacidad"): viven en una carpeta temporal fuera de la BD,
--- purgada explícitamente (Hito 8).
-CREATE TABLE IF NOT EXISTS entregas (
+-- Original documents are never stored here (see the privacy boundary in
+-- ARCHITECTURE.md). They are processed outside the database.
+CREATE TABLE IF NOT EXISTS submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    enunciado_id INTEGER NOT NULL REFERENCES enunciados(id) ON DELETE CASCADE,
+    assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
     alias TEXT UNIQUE,
-    texto_ocr TEXT,
-    metodo_ocr TEXT,
-    texto_anonimizado TEXT,
-    estado_pipeline TEXT NOT NULL DEFAULT 'importada',
-    creado_en TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    text_ocr TEXT,
+    method_ocr TEXT,
+    text_redacted TEXT,
+    status_pipeline TEXT NOT NULL DEFAULT 'imported',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- La tabla más sensible: alias aleatorio (no correlativo) -> identidad real.
--- Nunca debe exportarse ni salir del dispositivo.
-CREATE TABLE IF NOT EXISTS alias_alumno_map (
+-- The most sensitive table: random alias (not sequential) -> real identity. It should never be exported or leave the device.
+CREATE TABLE IF NOT EXISTS alias_student_map (
     alias TEXT PRIMARY KEY,
-    alumno_nombre TEXT NOT NULL,
-    alumno_id_clase TEXT,
-    entrega_id INTEGER NOT NULL REFERENCES entregas(id) ON DELETE CASCADE
+    student_name TEXT NOT NULL,
+    student_class_id TEXT,
+    submission_id INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS resultados (
+CREATE TABLE IF NOT EXISTS results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entrega_id INTEGER NOT NULL REFERENCES entregas(id) ON DELETE CASCADE,
-    criterio_id INTEGER NOT NULL REFERENCES criterios_rubrica(id),
-    evidencia_ia_json TEXT,
-    -- Reservada para el futuro modo "Corrección asistida por IA" (alto
-    -- riesgo, fuera de alcance de la Fase A). Sin usar mientras el modo
-    -- activo sea "Asistente de corrección".
-    puntuacion_sugerida REAL,
-    puntuacion_final REAL,
-    comentario_ia TEXT,
-    comentario_docente TEXT,
-    confirmado_por_docente INTEGER NOT NULL DEFAULT 0,
-    confirmado_en TEXT,
-    UNIQUE(entrega_id, criterio_id)
+    submission_id INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+    criterion_id INTEGER NOT NULL REFERENCES criteria_rubric(id),
+    ai_evidence_json TEXT,
+    -- Reserved for a future AI-assisted grading mode outside Phase A.
+    score_suggested REAL,
+    score_final REAL,
+    ai_comment TEXT,
+    comment_teacher TEXT,
+    confirmed_by_teacher INTEGER NOT NULL DEFAULT 0,
+    confirmed_at TEXT,
+    UNIQUE(submission_id, criterion_id)
 );
 
--- Trazabilidad exigida por el Art. 12 del Reglamento de IA.
-CREATE TABLE IF NOT EXISTS logs_auditoria (
+-- Audit trail required by Article 12 of the AI Act.
+CREATE TABLE IF NOT EXISTS logs_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entrega_id INTEGER REFERENCES entregas(id) ON DELETE SET NULL,
-    evento TEXT NOT NULL,
+    submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL,
+    event TEXT NOT NULL,
     actor TEXT NOT NULL,
-    version_modelo TEXT,
+    model_version TEXT,
     payload_json TEXT,
-    creado_en TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE TABLE IF NOT EXISTS configuracion (
-    clave TEXT PRIMARY KEY,
-    valor TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS configuration (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );

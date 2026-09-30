@@ -1,95 +1,115 @@
-export interface NuevoCriterio {
-  codigo: string;
-  descripcion: string;
-  puntuacion_max: number;
+export interface NewCriterion {
+  code: string;
+  description: string;
+  score_max: number;
 }
 
-export interface NuevaRubrica {
-  titulo: string;
-  asignatura: string;
-  curso: string;
-  criterios: NuevoCriterio[];
+export interface NewRubric {
+  title: string;
+  subject: string;
+  grade_level: string;
+  criteria: NewCriterion[];
 }
 
-export interface CriterioConId extends NuevoCriterio {
+export interface CriterionWithId extends NewCriterion {
   id: number;
-  orden: number;
+  sort_order: number;
 }
 
-export interface RubricaConCriterios {
+export interface RubricWithCriteria {
   id: number;
-  titulo: string;
-  asignatura: string;
-  curso: string;
+  title: string;
+  subject: string;
+  grade_level: string;
   version: number;
-  criterios: CriterioConId[];
+  criteria: CriterionWithId[];
 }
 
-export interface EntregaResumen {
+export interface SubmissionSummary {
   id: number;
-  enunciado_id: number;
-  texto_ocr: string | null;
-  metodo_ocr: string | null;
-  estado_pipeline: string;
-  alumno_nombre: string | null;
+  assignment_id: number;
+  text_ocr: string | null;
+  method_ocr: string | null;
+  status_pipeline: string;
+  student_name: string | null;
 }
 
-export interface CandidatoIdentificador {
-  tipo: string;
-  texto: string;
-  inicio: number;
-  fin: number;
+export interface IdentifierCandidate {
+  kind: string;
+  text: string;
+  start: number;
+  end: number;
 }
 
-export interface EvidenciaCriterio {
-  criterio_id: string;
-  evidencia_textual: string[];
+export interface CriterionEvidence {
+  criterion_id: string;
+  evidence_textual: string[];
 }
 
-export interface Inconsistencia {
-  criterio_id: string;
-  observacion: string;
+export interface Inconsistency {
+  criterion_id: string;
+  observation: string;
 }
 
-export interface FeedbackYConsistencia {
-  comentario_feedback: string;
-  inconsistencias: Inconsistencia[];
+export interface FeedbackAndConsistency {
+  comment_feedback: string;
+  inconsistencies: Inconsistency[];
 }
 
-export interface LogAuditoria {
+export interface AuditLog {
   id: number;
-  entrega_id: number | null;
-  evento: string;
+  submission_id: number | null;
+  event: string;
   actor: string;
-  version_modelo: string | null;
+  model_version: string | null;
   payload_json: string | null;
-  creado_en: string;
+  created_at: string;
 }
 
-/** Casos de prueba sintéticos definidos en el plan (docs, Hito de pruebas). */
-export const RUBRICAS_SINTETICAS: NuevaRubrica[] = [
+/** Synthetic test cases described in the project plan. */
+export const SYNTHETIC_RUBRICS: NewRubric[] = [
   {
-    titulo: "Análisis de poema",
-    asignatura: "Lingua/Lengua",
-    curso: "2º ESO",
-    criterios: [
-      { codigo: "C1", descripcion: "Identifica correctamente el tema principal.", puntuacion_max: 4 },
+    title: "Poem analysis",
+    subject: "Language and literature",
+    grade_level: "Year 8",
+    criteria: [
+      { code: "C1", description: "Correctly identifies the main theme.", score_max: 4 },
       {
-        codigo: "C2",
-        descripcion: "Identifica y explica al menos 2 recursos literarios con ejemplo textual.",
-        puntuacion_max: 3,
+        code: "C2",
+        description: "Identifies and explains at least two literary devices with textual examples.",
+        score_max: 3,
       },
-      { codigo: "C3", descripcion: "Coherencia y corrección expresiva.", puntuacion_max: 3 },
+      { code: "C3", description: "Coherence and clarity of expression.", score_max: 3 },
     ],
   },
   {
-    titulo: "MRUA: velocidad y distancia",
-    asignatura: "Física y Química",
-    curso: "4º ESO",
-    criterios: [
-      { codigo: "C1", descripcion: "Selecciona correctamente las fórmulas de MRUA.", puntuacion_max: 3 },
-      { codigo: "C2", descripcion: "Sustituye valores y calcula sin errores aritméticos.", puntuacion_max: 4 },
-      { codigo: "C3", descripcion: "Unidades correctas e interpretación del resultado.", puntuacion_max: 3 },
+    title: "Constant acceleration: speed and distance",
+    subject: "Physics and chemistry",
+    grade_level: "Year 10",
+    criteria: [
+      { code: "C1", description: "Selects the correct constant acceleration formulas.", score_max: 3 },
+      { code: "C2", description: "Substitutes values and calculates without arithmetic errors.", score_max: 4 },
+      { code: "C3", description: "Uses correct units and interprets the result.", score_max: 3 },
     ],
   },
 ];
+
+export interface AssignmentSummary {
+  id: number;
+  rubric_id: number;
+  text: string;
+  submission_count: number;
+}
+
+export interface GradingState {
+  revision: number;
+  criteria: { criterion_id: string; score: number | null; comment_teacher: string | null; evidence_textual: string[] }[];
+  feedback: FeedbackAndConsistency | null;
+}
+
+export interface ImportProgress {
+  request_id: string;
+  page: number;
+  total: number;
+  stage: string;
+}

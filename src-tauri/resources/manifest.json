@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-09-30",
+  "supported_target": "x86_64-pc-windows-msvc",
+  "resources": [
+    {
+      "path": "pdfium/bin/pdfium.dll",
+      "version": "156.0.8076.0",
+      "source": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8076/pdfium-win-x64.tgz",
+      "license": "BSD-3-Clause and bundled third-party licenses",
+      "sha256": "69f1e860f6742fbaafcc4db80e785eec9a4ee0da36ea6d1dc0867ea0f18baea6",
+      "size_bytes": 7381504
+    },
+    {
+      "path": "fonts/Roboto-Regular.ttf",
+      "version": "roboto-2@38062f4b4a0be4346d07a928408da21602545e9e",
+      "source": "https://raw.githubusercontent.com/googlefonts/roboto-2/38062f4b4a0be4346d07a928408da21602545e9e/src/hinted/Roboto-Regular.ttf",
+      "license": "Apache-2.0",
+      "sha256": "56a45233d29f11b4dfb86d248e921939d115778f87325e7ae8cc108383d6664d",
+      "size_bytes": 515100
+    },
+    {
+      "path": "models/ocr/text-detection.rten",
+      "version": "df0edd170279ab971b53e094c627255a87e1a503",
+      "source": "https://huggingface.co/robertknight/ocrs/resolve/df0edd170279ab971b53e094c627255a87e1a503/text-detection-ssfbcj81.rten",
+      "license": "CC-BY-SA-4.0",
+      "sha256": "614aafabf27c94d386f7aa036c967c2e47e4b9938fa11531ca8f5698c1ca4c36",
+      "size_bytes": 2523564
+    },
+    {
+      "path": "models/ocr/text-recognition.rten",
+      "version": "df0edd170279ab971b53e094c627255a87e1a503",
+      "source": "https://huggingface.co/robertknight/ocrs/resolve/df0edd170279ab971b53e094c627255a87e1a503/text-rec-checkpoint-s52qdbqt.rten",
+      "license": "CC-BY-SA-4.0",
+      "sha256": "606d9a0414c6b73c99df75b707c11c70d1c8b12e1d4f900922e185fc37bfca65",
+      "size_bytes": 9716444
+    }
+  ]
+}
