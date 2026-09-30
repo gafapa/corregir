@@ -80,20 +80,20 @@ export function RedactionPanel({
   }
 
   if (["redacted", "grade_confirmed"].includes(submission.status_pipeline)) {
-    return <p>✅ Redaction confirmed.</p>;
+    return <p className="confirmed-assessment">Redaction confirmed.</p>;
   }
 
   return (
-    <div style={{ border: "1px solid #ccc", padding: "0.5rem", marginTop: "0.5rem" }}>
+    <div className="review-panel">
       <h4>Redact submission #{submission.id}</h4>
 
       <label>
         Class roster (one full name per line or comma separated):
         <textarea
+          disabled={busy}
           value={roster}
           onChange={(e) => setRoster(e.currentTarget.value)}
           rows={2}
-          style={{ width: "100%" }}
         />
       </label>
       <button onClick={detect} disabled={busy}>Detect identifiers</button>
@@ -107,6 +107,7 @@ export function RedactionPanel({
                 <label>
                   <input
                     type="checkbox"
+                    disabled={busy}
                     checked={accepted.has(i)}
                     onChange={() => toggle(i)}
                   />{" "}
@@ -121,24 +122,24 @@ export function RedactionPanel({
       <label>
         Additional text to redact (one exact fragment per line):
         <textarea
+          disabled={busy}
           value={manual}
           onChange={(e) => setManual(e.currentTarget.value)}
           rows={2}
-          style={{ width: "100%" }}
         />
       </label>
 
       <label>
         Student's real name (stored locally, never sent to the AI):
-        <input value={studentName} onChange={(e) => setStudentName(e.currentTarget.value)} />
+        <input disabled={busy} value={studentName} onChange={(e) => setStudentName(e.currentTarget.value)} />
       </label>
 
-      <button onClick={confirm} disabled={busy}>Confirm redaction</button>
+      <div className="action-row"><button className="button-primary" onClick={confirm} disabled={busy}>Confirm redaction</button></div>
 
-      {error && <pre role="alert" style={{ color: "crimson" }}>{error}</pre>}
+      {error && <pre role="alert">{error}</pre>}
       {result && (
-        <p>
-          ✅ Confirmed. Assigned alias: <code>{result.alias}</code>
+        <p className="notice" role="status">
+          Confirmed. Assigned alias: <code>{result.alias}</code>
         </p>
       )}
     </div>

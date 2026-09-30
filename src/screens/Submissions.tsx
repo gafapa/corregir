@@ -125,17 +125,32 @@ export function Submissions() {
   }
 
   const activeRubricId = assignments.find((item) => item.id === assignmentId)?.rubric_id;
+  const activeAssignment = assignments.find((item) => item.id === assignmentId);
   const criteria = rubrics.find((item) => item.id === activeRubricId)?.criteria ?? [];
   return (
     <section aria-labelledby="submissions-title">
       <h2 id="submissions-title">Submissions</h2>
-      <p>Reopen a saved assignment or create a new one. Import PDF, PNG, or JPEG files up to 50 MiB and 50 pages.</p>
+      <p className="page-description">Reopen a saved assignment or create a new one. Import PDF, PNG, or JPEG files up to 50 MiB and 50 pages.</p>
+      <div className="assignment-layout">
+      <div className="saved-work">
+      <h3>Continue saved work</h3>
       <label>Saved assignment:
         <select value={assignmentId ?? ""} disabled={loading || importing} onChange={(event) => selectAssignment(Number(event.currentTarget.value) || null)}>
           <option value="">Select an assignment</option>
           {assignments.map((item) => <option key={item.id} value={item.id}>#{item.id} - {item.text.slice(0, 60)} ({item.submission_count} submissions)</option>)}
         </select>
       </label>
+      {activeAssignment && <div className="assignment-preview">
+        <p><strong>Active assignment: #{assignmentId}</strong></p>
+        <p>{activeAssignment.text}</p>
+        <span className="supporting-text">{rubrics.find((item) => item.id === activeRubricId)?.title} · {activeAssignment.submission_count} submissions</span>
+      </div>}
+      {!loading && assignments.length === 0 && <p className="supporting-text">No saved assignments yet. Select a rubric and create your first assignment.</p>}
+      {assignmentId !== null && <div className="action-row">
+        <button className="button-primary" onClick={importFile} disabled={loading || importing}>Import PDF/image</button>
+        <button onClick={exportCsv} disabled={loading || importing}>Export confirmed grades (CSV)</button>
+      </div>}
+      </div>
       <fieldset disabled={loading || importing}>
         <legend>New assignment</legend>
         <label>Rubric:
@@ -147,24 +162,31 @@ export function Submissions() {
         <label>Assignment instructions:
           <textarea value={assignmentText} maxLength={65536} onChange={(event) => setAssignmentText(event.currentTarget.value)} />
         </label>
-        <button onClick={createAssignment} disabled={rubricId === null || !assignmentText.trim()}>Create assignment</button>
+        <button className="button-primary" onClick={createAssignment} disabled={rubricId === null || !assignmentText.trim()}>Create assignment</button>
+        {!loading && rubrics.length === 0 && <p className="supporting-text">Create a synthetic rubric in the Rubrics section before adding an assignment.</p>}
       </fieldset>
-      {assignmentId !== null && <>
-        <p>Active assignment: #{assignmentId}</p>
-        <button onClick={importFile} disabled={loading || importing}>Import PDF/image</button>
-        <button onClick={exportCsv} disabled={loading || importing}>Export confirmed grades (CSV)</button>
-      </>}
-      {importing && <div role="status" aria-live="polite">
+      </div>
+      {importing && <div className="import-progress" role="status" aria-live="polite">
         <p>{progress ? `Page ${progress.page} of ${progress.total}: ${progress.stage}` : "Preparing import..."}</p>
         {progress && progress.total > 0 && <progress aria-label="Import progress" value={progress.page} max={progress.total} />}
         <button onClick={cancelImport} disabled={!progress}>Cancel import</button>
       </div>}
       {loading && <p role="status">Loading saved work...</p>}
-      {notice && <p role="status">{notice}</p>}
+      {notice && <p className="notice" role="status">{notice}</p>}
       {error && <pre role="alert">{error}</pre>}
-      <h3>Processed submissions ({submissions.length})</h3>
-      <ul>{submissions.map((submission) => <li key={submission.id}>
-        <strong>#{submission.id}{submission.student_name ? ` - ${submission.student_name}` : ""} - {submission.method_ocr ?? "unknown"} - {submission.status_pipeline}</strong>
+      <div className="section-heading"><h3>Processed submissions ({submissions.length})</h3></div>
+      {!loading && submissions.length === 0 && <div className="empty-state">
+        <strong>{assignmentId === null ? "Choose an assignment to begin" : "Ready for the first submission"}</strong>
+        <p>{assignmentId === null ? "Your saved submissions will appear here when you select an assignment." : "Import a PDF or image, review its redaction, then enter your assessment."}</p>
+      </div>}
+      <ul className="submission-list">{submissions.map((submission) => <li className="submission-item" key={submission.id}>
+        <div className="submission-heading">
+          <div><h4>Submission #{submission.id}{submission.student_name ? ` — ${submission.student_name}` : ""}</h4>
+          <span className="supporting-text">{submission.method_ocr === "text_native" ? "PDF text extraction" : submission.method_ocr === "ocr_local" ? "Optical character recognition" : submission.method_ocr ?? "Extraction method unavailable"}</span></div>
+          <span className={`status-label ${submission.status_pipeline === "grade_confirmed" ? "status-confirmed" : submission.status_pipeline === "redacted" ? "status-reviewed" : ""}`}>
+            {submission.status_pipeline === "grade_confirmed" ? "Grade confirmed" : submission.status_pipeline === "redacted" ? "Ready to grade" : "Redaction review needed"}
+          </span>
+        </div>
         <details><summary>Original extracted text (local only)</summary><pre>{submission.text_ocr}</pre></details>
         <RedactionPanel submission={submission} onConfirmed={() => { void reloadSubmissions(submission.assignment_id); }} />
         <GradingPanel submission={submission} criteria={criteria} onGradeConfirmed={() => { void reloadSubmissions(submission.assignment_id); }} />

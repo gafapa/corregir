@@ -30,10 +30,10 @@ export function Diagnostics() {
   return (
     <section>
       <h2>Diagnostics (Milestone 1)</h2>
-      <p>Test the connection to the local inference server (Ollama).</p>
+      <p className="page-description">Test the connection to the local inference server (Ollama).</p>
 
-      <div className="row">
-        <label htmlFor="model-input">Model:</label>
+      <div className="diagnostic-form">
+        <label htmlFor="model-input">Model:
         <input
           id="model-input"
           value={model}
@@ -41,7 +41,8 @@ export function Diagnostics() {
           disabled={loading}
           placeholder="Model name in Ollama"
         />
-        <button onClick={testConnection} disabled={loading}>
+        </label>
+        <button className="button-primary" onClick={testConnection} disabled={loading}>
           {loading ? "Testing…" : "Test AI connection"}
         </button>
       </div>
@@ -56,7 +57,7 @@ export function Diagnostics() {
       {error && (
         <div>
           <h3>Error:</h3>
-          <pre role="alert" style={{ color: "crimson" }}>{error}</pre>
+          <pre role="alert">{error}</pre>
         </div>
       )}
     </section>

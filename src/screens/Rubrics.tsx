@@ -10,15 +10,18 @@ import { SYNTHETIC_RUBRICS, RubricWithCriteria } from "../lib/types";
 export function Rubrics() {
   const [rubrics, setRubrics] = useState<RubricWithCriteria[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function reload() {
+    setLoading(true);
     setError(null);
     try {
       const list = await invoke<RubricWithCriteria[]>("cmd_list_rubrics");
       setRubrics(list);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -44,12 +47,12 @@ export function Rubrics() {
   return (
     <section>
       <h2>Rubrics (Milestone 2)</h2>
-      <p>
+      <p className="page-description">
         Rubrics contain configuration data, not student data, so they do not
         require redaction.
       </p>
 
-      <div className="row">
+      <div className="action-row">
         {SYNTHETIC_RUBRICS.map((r, i) => (
           <button key={r.title} onClick={() => createSyntheticRubric(i)} disabled={loading}>
             Create synthetic rubric: {r.title}
@@ -57,10 +60,12 @@ export function Rubrics() {
         ))}
       </div>
 
-      {error && <pre role="alert" style={{ color: "crimson" }}>{error}</pre>}
+      {error && <pre role="alert">{error}</pre>}
+      {loading && <p className="assessment-status" role="status">Loading rubrics…</p>}
 
       <h3>Saved rubrics ({rubrics.length})</h3>
-      <ul>
+      {rubrics.length === 0 && !loading && <div className="empty-state"><strong>No saved rubrics yet</strong><p>Create one of the synthetic rubrics above to prepare your first assignment.</p></div>}
+      <ul className="rubric-list">
         {rubrics.map((r) => (
           <li key={r.id}>
             <strong>

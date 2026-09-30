@@ -18,29 +18,36 @@ function App() {
   }, []);
 
   return (
-    <main className="container">
-      <h1>Corregir — Phase A (synthetic data)</h1>
-      {closeError && <p role="alert">{closeError}</p>}
-      <nav className="row" aria-label="Main navigation">
-        <button onClick={() => setTab("rubrics")} disabled={tab === "rubrics"}>
-          Rubrics
-        </button>
-        <button onClick={() => setTab("submissions")} disabled={tab === "submissions"}>
-          Submissions
-        </button>
-        <button onClick={() => setTab("audit")} disabled={tab === "audit"}>
-          Audit
-        </button>
-        <button onClick={() => setTab("diagnostics")} disabled={tab === "diagnostics"}>
-          Diagnostics
-        </button>
+    <div className="app-shell">
+      <a className="skip-link" href="#workspace">Skip to workspace</a>
+      <header className="app-header">
+        <div className="brand">
+          <svg className="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <rect x="1" y="1" width="30" height="30" rx="8" fill="currentColor" />
+            <path d="m9 16 5 5 9-10" stroke="var(--surface)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <h1>Corregir</h1>
+          <span className="brand-description">Grading workspace</span>
+        </div>
+        <span className="environment-label">Phase A · Synthetic data</span>
+      </header>
+      <nav className="main-navigation" aria-label="Main navigation">
+        {(["submissions", "rubrics", "audit", "diagnostics"] as Tab[]).map((item) => (
+          <button key={item} aria-current={tab === item ? "page" : undefined} onClick={() => setTab(item)}>
+            {item === "submissions" ? "Submissions" : item === "rubrics" ? "Rubrics" : item === "audit" ? "Audit" : "Diagnostics"}
+          </button>
+        ))}
       </nav>
+      <main id="workspace" className="container" tabIndex={-1}>
+        {closeError && <p role="alert">{closeError}</p>}
 
-      {tab === "rubrics" && <Rubrics />}
-      {tab === "submissions" && <Submissions />}
-      {tab === "audit" && <Audit />}
-      {tab === "diagnostics" && <Diagnostics />}
-    </main>
+        {tab === "rubrics" && <Rubrics />}
+        {tab === "submissions" && <Submissions />}
+        {tab === "audit" && <Audit />}
+        {tab === "diagnostics" && <Diagnostics />}
+      </main>
+      <footer className="app-footer"><span>Teacher-reviewed grading assistance</span><span>Local desktop workspace</span></footer>
+    </div>
   );
 }
 

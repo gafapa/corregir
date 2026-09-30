@@ -27,6 +27,7 @@ export function GradingPanel({
   const [restoreVersion, setRestoreVersion] = useState(0);
   const [comments, setComments] = useState<Record<string, string>>({});
   const [assessmentSaved, setAssessmentSaved] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -53,7 +54,7 @@ export function GradingPanel({
       });
       if (!destination) return;
       await invoke("cmd_export_pdf_feedback", { submissionId: submission.id, destinationPath: destination });
-      alert(`Feedback sheet saved to ${destination}`);
+      setNotice(`Feedback sheet saved to ${destination}`);
     } catch (e) {
       setError(String(e));
     }
@@ -61,13 +62,14 @@ export function GradingPanel({
 
   if (submission.status_pipeline === "grade_confirmed") {
     return (
-      <div>
+      <div className="confirmed-assessment">
         <p>
-          ✅ Grade confirmed for submission #{submission.id}
+          Grade confirmed for submission #{submission.id}
           {submission.student_name ? ` (${submission.student_name})` : ""}.
         </p>
         <button onClick={exportPdf}>Export feedback sheet (PDF)</button>
-        {error && <pre role="alert" style={{ color: "crimson" }}>{error}</pre>}
+        {notice && <p className="notice" role="status">{notice}</p>}
+        {error && <pre role="alert">{error}</pre>}
       </div>
     );
   }
@@ -148,27 +150,30 @@ export function GradingPanel({
   }
 
   return (
-    <div style={{ border: "1px solid #99c", padding: "0.5rem", marginTop: "0.5rem" }}>
-      <p role="status" aria-live="polite">{loading ? "Working…" : assessmentSaved ? "Assessment saved." : "Save changes before confirming."}</p>
+    <div className="grading-panel">
       <h4>
         Grading — assistant mode
         {submission.student_name ? ` — ${submission.student_name}` : ""}
       </h4>
+      <p className="assessment-status" role="status" aria-live="polite">{loading ? "Working…" : assessmentSaved ? "Assessment saved." : "Save changes before confirming."}</p>
 
-      <button onClick={() => setRestoreVersion((version) => version + 1)} disabled={loading !== null}>Reload saved assessment</button>
+      <div className="action-row">
+      <button className="button-quiet" onClick={() => setRestoreVersion((version) => version + 1)} disabled={loading !== null}>Reload saved assessment</button>
       <button onClick={requestEvidence} disabled={loading !== null}>
         {loading === "evidence" ? "Asking AI…" : "1. Find evidence (no grade)"}
       </button>
+      </div>
 
       {criteria.map((c) => {
         const evidence = evidenceList.find((item) => item.criterion_id === c.code);
         return (
-          <div key={c.id} style={{ marginTop: "0.5rem" }}>
-            <strong>
-              {c.code} ({c.score_max} pts): {c.description}
-            </strong>
+          <div key={c.id} className="criterion">
+            <div className="criterion-title">
+              <span className="criterion-code">{c.code} · {c.score_max} pts</span>
+              <strong>{c.description}</strong>
+            </div>
             {evidence && (
-              <ul>
+              <ul className="evidence-list">
                 {evidence.evidence_textual.map((quote, i) => (
                   <li key={i}>
                     <em>"{quote}"</em>
@@ -176,6 +181,7 @@ export function GradingPanel({
                 ))}
               </ul>
             )}
+            <div className="criterion-fields">
             <label>
               Your score for {c.code}:{" "}
               <input
@@ -202,12 +208,13 @@ export function GradingPanel({
                 setFeedback(null);
               }} />
             </label>
+            </div>
           </div>
         );
       })}
 
-      <div style={{ marginTop: "0.5rem" }}>
-        <button onClick={saveTentativeGrade} disabled={loading !== null}>
+      <div className="action-row">
+        <button className={assessmentSaved ? "" : "button-primary"} onClick={saveTentativeGrade} disabled={loading !== null}>
           {loading === "grade" ? "Saving…" : "2. Save my assessment"}
         </button>
         <button onClick={requestFeedback} disabled={loading !== null || !assessmentSaved}>
@@ -216,13 +223,13 @@ export function GradingPanel({
       </div>
 
       {feedback && (
-        <div style={{ marginTop: "0.5rem" }}>
+        <div className="feedback-panel">
           <p>
             <strong>Feedback for the student:</strong> {feedback.comment_feedback}
           </p>
           {feedback.inconsistencies.length > 0 && (
             <>
-              <strong style={{ color: "darkorange" }}>Possible inconsistencies:</strong>
+              <strong className="warning-text">Possible inconsistencies:</strong>
               <ul>
                 {feedback.inconsistencies.map((inc, i) => (
                   <li key={i}>
@@ -235,18 +242,18 @@ export function GradingPanel({
         </div>
       )}
 
-      <div style={{ marginTop: "0.5rem" }}>
-        <button onClick={confirmGrade} disabled={loading !== null || !assessmentSaved}>
+      <div className="action-row">
+        <button className={assessmentSaved ? "button-primary" : ""} onClick={confirmGrade} disabled={loading !== null || !assessmentSaved}>
           {loading === "confirm" ? "Confirming…" : "4. Confirm grade (Milestone 6)"}
         </button>
         {confirmedGrade !== null && (
-          <span style={{ marginLeft: "0.5rem" }}>
-            ✅ Confirmed total score: <strong>{confirmedGrade}</strong>
+          <span className="confirmed-assessment">
+            Confirmed total score: <strong>{confirmedGrade}</strong>
           </span>
         )}
       </div>
 
-      {error && <pre role="alert" style={{ color: "crimson" }}>{error}</pre>}
+      {error && <pre role="alert">{error}</pre>}
     </div>
   );
 }
