@@ -1,5 +1,7 @@
 # Corregir
 
+[![Verify](https://github.com/gafapa/corregir/actions/workflows/ci.yml/badge.svg)](https://github.com/gafapa/corregir/actions/workflows/ci.yml)
+
 Corregir is a local desktop prototype for teacher-reviewed grading assistance. It imports PDF or image submissions, extracts text locally, requires a teacher to review redaction, and sends only confirmed redacted text to a local Ollama model. The teacher enters and confirms the final grade.
 
 This repository implements Phase A with synthetic test data. The architecture and impact assessment describe the controls needed before use with real student data.
@@ -75,6 +77,6 @@ cargo audit
 
 Install `cargo-audit` with `cargo install cargo-audit --locked` before running the Rust dependency audit. Tests that contact Ollama or the OS credential store are explicitly ignored by default. To run the local inference checks without touching shared credentials, use `cargo test --lib -- --ignored --skip is_idempotent --test-threads=1`. The OCR smoke test runs in the default suite with optimized neural inference kernels.
 
-Windows CI runs resource verification, frontend tests/build/audit and Rust formatting/tests/audit. Dependabot monitors JavaScript, Cargo and workflow dependencies. Bundled resources are pinned with SHA-256 checks enforced by both `pnpm verify:resources` and the Rust build. Their provenance and licenses are recorded in [third-party notices](src-tauri/resources/THIRD-PARTY-NOTICES.md).
+[Windows CI on GitHub Actions](https://github.com/gafapa/corregir/actions/workflows/ci.yml) runs resource verification, frontend tests/build/audit and Rust formatting/tests/audit on pushes, pull requests, manual dispatch and a weekly schedule. It does not require a local development machine or an Ollama installation. Dependabot monitors JavaScript, Cargo and workflow dependencies; repository security alerts and automatic security updates are enabled. Bundled resources are pinned with SHA-256 checks enforced by both `pnpm verify:resources` and the Rust build. Their provenance and licenses are recorded in [third-party notices](src-tauri/resources/THIRD-PARTY-NOTICES.md).
 
 The all-platform Rust lockfile still reports two upstream GTK advisories that do not enter the supported Windows build. They remain visible, rather than being suppressed; Linux support is blocked pending native resources and a separate security review. See [project review](docs/PROJECT-REVIEW.md) for current validation and limitations.
