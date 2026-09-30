@@ -4,7 +4,7 @@ The desktop workspace retains its blue accent, system typography, English interf
 
 ## Shared visual language
 
-`src/App.css` defines semantic tokens for text, surfaces, borders, selection, focus, primary actions, success, warnings and errors. Light and dark variants follow the operating system preference. Controls have a minimum height of 44 pixels, visible keyboard focus and reduced-motion support. All fonts and visual assets work offline.
+`src/App.css` defines semantic tokens for text, surfaces, borders, selection, focus, primary actions, success, warnings and errors. Light and dark variants follow the operating system preference. Action buttons have a minimum height of 44 pixels. The interface includes visible keyboard focus and reduced-motion support. All fonts and visual assets work offline.
 
 The header separates the product name from the synthetic-data environment indicator. Navigation identifies the current section with `aria-current`, weight, color and an underline. A keyboard skip link moves directly to the workspace.
 
@@ -22,5 +22,7 @@ The header separates the product name from the synthetic-data environment indica
 A bounded browser inspection used injected synthetic IPC fixtures, not actual student records or native backend calls. Nine screenshots covered all four sections, grading and redaction, light/dark themes, the standard 1100 × 750 desktop viewport, a 680-pixel window and a 390-pixel stress case. No inspected page overflowed horizontally, no buttons fell below 44 pixels and no runtime exceptions were recorded. The diagnostic error and confirmed-grade export states were exercised. Screenshots and inspection output remain local under the ignored `output/interface-previews` directory.
 
 The Impeccable mechanical detector reported no findings for the changed interface files. Existing workflow regression tests, TypeScript compilation, the production frontend build and the backend checks run in [GitHub Actions](https://github.com/gafapa/corregir/actions/workflows/ci.yml). The visual fixture check does not substitute for native file-dialog or real-model integration testing.
+
+The confirmation inspection verified keyboard activation of the skip link and focus transfer to the workspace. Measured light-theme contrast ratios were 15.04:1 for headings and labels, 5.88:1 for descriptive text and 7.22:1 for primary button text. The [hosted verification of the interface change](https://github.com/gafapa/corregir/actions/runs/36750016652), commit `bb013b32a7d31c8b6ba16db5033f94026275a258`, completed successfully: 5 frontend tests and 38 backend tests passed, frontend compilation and resource verification passed, and both dependency audits passed with the two previously documented GTK warnings remaining visible.
 
 Vite excludes temporary browser profiles and verification output from file watching to prevent Windows file-lock failures during development.
