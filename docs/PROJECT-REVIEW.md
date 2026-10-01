@@ -73,6 +73,10 @@ The initial dependency update proposals exposed breaking APIs in digest hexadeci
 
 Real handwriting evaluation, macOS/Linux resource bundles, signed public distribution and institutional deployment approval remain outside the implemented Phase A scope.
 
+For commit `3b5c978afc5d97383c55165639e86b4ffc45ab42`, [hosted verification](https://github.com/gafapa/corregir/actions/runs/36934171545) completed successfully: **12 frontend tests and 48 Rust tests passed**, with five environment-dependent Rust tests ignored. Frontend compilation, resource verification, formatting and both dependency audits passed; the same two upstream GTK warnings remain visible. Checks ran on GitHub rather than the local development machine.
+
+The [Windows installer run](https://github.com/gafapa/corregir/actions/runs/36934177062) also completed successfully for that commit. It repeated the frontend/backend suites, built the release-profile NSIS installer, installed it silently on the hosted runner, verified installed resource hashes and started the packaged application twice against the same encrypted workspace without creating a plaintext SQLite file. This checks packaging, initial startup and reopening with the OS credential store; it does not verify interactive grading or trusted code signing. The unsigned installer is available in that run's artifact for 14 days.
+
 ## Primary references
 
 - [Ollama thinking API](https://ollama.com/blog/thinking), including the top-level `think` option.
