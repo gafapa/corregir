@@ -72,31 +72,25 @@ fn parse_text(xml: &str) -> Result<String, RenderError> {
                     return Err(RenderError::LimitExceeded);
                 }
                 match tag.local_name().as_ref() {
-                    b"ins" | b"del" | b"moveFrom" | b"moveTo" | b"drawing" | b"object" | b"pict" | b"altChunk" | b"fldChar" | b"fldSimple" | b"oMath" | b"oMathPara" | b"numPr" => return Err(RenderError::Processing("accept tracked changes and convert drawings, equations, automatic numbering or fields to plain text, or export this DOCX as PDF".into())),
-                    b"t" => in_text = true,
-                    b"tab" => text.push('\t'),
-                    b"br" | b"cr" => text.push('\n'),
+                    "ins" | "del" | "moveFrom" | "moveTo" | "drawing" | "object" | "pict" | "altChunk" | "fldChar" | "fldSimple" | "oMath" | "oMathPara" | "numPr" => return Err(RenderError::Processing("accept tracked changes and convert drawings, equations, automatic numbering or fields to plain text, or export this DOCX as PDF".into())),
+                    "t" => in_text = true,
+                    "tab" => text.push('\t'),
+                    "br" | "cr" => text.push('\n'),
                     _ => ()
                 }
             }
             Event::End(tag) => {
                 depth = depth.saturating_sub(1);
                 match tag.local_name().as_ref() {
-                    b"t" => in_text = false,
-                    b"p" => text.push('\n'),
-                    b"tc" => text.push('\t'),
+                    "t" => in_text = false,
+                    "p" => text.push('\n'),
+                    "tc" => text.push('\t'),
                     _ => (),
                 }
             }
-            Event::Text(value) if in_text => text.push_str(
-                &value
-                    .xml_content()
-                    .map_err(|error| RenderError::Processing(error.to_string()))?,
-            ),
+            Event::Text(value) if in_text => text.push_str(&value.xml10_content()),
             Event::GeneralRef(value) if in_text => {
-                let name = value
-                    .decode()
-                    .map_err(|error| RenderError::Processing(error.to_string()))?;
+                let name: &str = value.as_ref();
                 let escaped = format!("&{name};");
                 text.push_str(
                     &quick_xml::escape::unescape(&escaped)
