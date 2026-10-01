@@ -23,10 +23,17 @@ fn main() {
             "resource size changed: {relative}"
         );
         assert_eq!(
-            format!("{:x}", Sha256::digest(&bytes)),
+            hex_digest(&bytes),
             resource["sha256"].as_str().unwrap(),
             "resource hash changed: {relative}"
         );
     }
     tauri_build::build()
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

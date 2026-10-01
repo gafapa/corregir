@@ -1,8 +1,9 @@
 //! SQLite lives in memory. Only authenticated encrypted snapshots reach disk.
 use crate::crypto::keychain::{self, KeychainError};
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use fs2::FileExt;
+use rand::RngExt;
 use rusqlite::{Connection, MAIN_DB};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -60,7 +61,9 @@ impl DbState {
             return Err(DbError::InvalidDatabase);
         }
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(self.key.as_ref()));
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let mut nonce_bytes = [0u8; 12];
+        rand::rng().fill(&mut nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
         let encrypted = cipher
             .encrypt(&nonce, data.as_ref())
             .map_err(|_| DbError::DecryptionFailed)?;
@@ -113,6 +116,59 @@ pub fn open(directory: &Path) -> Result<DbState, DbError> {
         !directory.join(ENCRYPTED_DB_NAME).exists(),
     )?);
     open_locked(directory, derive_key(&passphrase)?, directory_lock)
+}
+
+/// Explicit recovery preserves the unreadable encrypted snapshot before replacement.
+pub fn recover(directory: &Path, recovered: Connection) -> Result<DbState, DbError> {
+    let directory_lock = lock_directory(directory)?;
+    if [
+        "corregir.sqlite",
+        "corregir.sqlite-wal",
+        "corregir.sqlite-shm",
+        "corregir.sqlite-journal",
+    ]
+    .iter()
+    .any(|name| directory.join(name).exists())
+    {
+        return Err(DbError::InvalidDatabase);
+    }
+    let passphrase = Zeroizing::new(keychain::load_passphrase(true)?);
+    recover_locked(
+        directory,
+        recovered,
+        derive_key(&passphrase)?,
+        directory_lock,
+    )
+}
+
+fn recover_locked(
+    directory: &Path,
+    recovered: Connection,
+    key: [u8; 32],
+    directory_lock: File,
+) -> Result<DbState, DbError> {
+    let path_encrypted = directory.join(ENCRYPTED_DB_NAME);
+    if path_encrypted.exists() {
+        if fs::metadata(&path_encrypted)?.len() > MAX_DATABASE_BYTES + 28 {
+            return Err(DbError::InvalidDatabase);
+        }
+        let mut archive = tempfile::Builder::new()
+            .prefix("corregir-before-recovery-")
+            .suffix(".enc")
+            .tempfile_in(directory)?;
+        std::io::copy(&mut File::open(&path_encrypted)?, &mut archive)?;
+        archive.as_file().sync_all()?;
+        archive.keep().map_err(|error| error.error)?;
+    }
+    let state = DbState {
+        conn: Mutex::new(Some(recovered)),
+        directory: directory.to_path_buf(),
+        path_encrypted,
+        key: Zeroizing::new(key),
+        _directory_lock: directory_lock,
+    };
+    state.seal()?;
+    Ok(state)
 }
 
 #[cfg(test)]
@@ -209,6 +265,117 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     const KEY: [u8; 32] = [42; 32];
+    #[test]
+    fn explicit_recovery_preserves_the_original_and_uses_a_new_device_key() {
+        let directory = tempdir().unwrap();
+        let state = open_with_key(directory.path(), KEY).unwrap();
+        let original = fs::read(directory.path().join(ENCRYPTED_DB_NAME)).unwrap();
+        let data = state
+            .conn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .serialize(MAIN_DB)
+            .unwrap()
+            .to_vec();
+        let mut restored = Connection::open_in_memory().unwrap();
+        restored
+            .deserialize_read_exact(MAIN_DB, data.as_slice(), data.len(), false)
+            .unwrap();
+        restored
+            .execute(
+                "INSERT INTO configuration VALUES ('recovery-proof','preserved')",
+                [],
+            )
+            .unwrap();
+        drop(state);
+        drop(
+            recover_locked(
+                directory.path(),
+                restored,
+                [25; 32],
+                lock_directory(directory.path()).unwrap(),
+            )
+            .unwrap(),
+        );
+        let archives: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("corregir-before-recovery-")
+            })
+            .collect();
+        assert_eq!(archives.len(), 1);
+        assert_eq!(fs::read(&archives[0]).unwrap(), original);
+        let reopened = open_with_key(directory.path(), [25; 32]).unwrap();
+        let value: String = reopened
+            .conn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM configuration WHERE key='recovery-proof'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "preserved");
+        assert!(!directory.path().join("corregir.sqlite").exists());
+    }
+    #[test]
+    fn reads_legacy_aes_010_snapshots_and_keeps_wire_format_compatible() {
+        let directory = tempdir().unwrap();
+        let state = open_with_key(directory.path(), KEY).unwrap();
+        let plain = {
+            let guard = state.conn.lock().unwrap();
+            let conn = guard.as_ref().unwrap();
+            conn.execute(
+                "INSERT INTO configuration VALUES ('migration-proof','preserved')",
+                [],
+            )
+            .unwrap();
+            conn.serialize(MAIN_DB).unwrap().to_vec()
+        };
+        let legacy_cipher =
+            <aes_gcm_legacy::Aes256Gcm as aes_gcm_legacy::aead::KeyInit>::new_from_slice(&KEY)
+                .unwrap();
+        let nonce = [8u8; 12];
+        let encrypted = aes_gcm_legacy::aead::Aead::encrypt(
+            &legacy_cipher,
+            aes_gcm_legacy::Nonce::from_slice(&nonce),
+            plain.as_slice(),
+        )
+        .unwrap();
+        let mut bytes = nonce.to_vec();
+        bytes.extend_from_slice(&encrypted);
+        fs::write(directory.path().join(ENCRYPTED_DB_NAME), bytes).unwrap();
+        drop(state);
+        let reopened = open_with_key(directory.path(), KEY).unwrap();
+        let guard = reopened.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM configuration WHERE key='migration-proof'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "preserved"
+        );
+        let current = fs::read(directory.path().join(ENCRYPTED_DB_NAME)).unwrap();
+        let legacy_plain = aes_gcm_legacy::aead::Aead::decrypt(
+            &legacy_cipher,
+            aes_gcm_legacy::Nonce::from_slice(&current[..12]),
+            &current[12..],
+        )
+        .unwrap();
+        assert!(legacy_plain.starts_with(b"SQLite format 3\0"));
+    }
     #[test]
     fn creates_seals_and_reopens_database_without_plaintext() {
         let directory = tempdir().unwrap();

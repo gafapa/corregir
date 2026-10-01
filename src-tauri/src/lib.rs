@@ -12,8 +12,10 @@ use tauri::{Emitter, Manager};
 #[derive(Default)]
 struct ClosingState(AtomicBool);
 
+use commands::backup::{cmd_export_backup, cmd_restore_backup};
 use commands::configuration::{
-    cmd_create_assignment, cmd_create_rubric, cmd_list_assignments, cmd_list_rubrics,
+    cmd_create_assignment, cmd_create_rubric, cmd_create_rubric_version, cmd_list_assignments,
+    cmd_list_rubrics,
 };
 use commands::diagnostics::cmd_test_ai_connection;
 use commands::export::{
@@ -23,8 +25,10 @@ use commands::grading::{
     cmd_load_grading_state, cmd_request_evidence, cmd_request_feedback, cmd_save_grade_tentative,
 };
 use commands::ingestion::{cmd_cancel_import, cmd_import_submission, cmd_list_submissions};
+use commands::recovery::{cmd_recover_workspace, cmd_recovery_status, RecoveryState};
 use commands::redaction::{cmd_confirm_redaction, cmd_detect_identifiers};
 use commands::review::cmd_confirm_grade;
+use commands::settings::{cmd_load_ollama_settings, cmd_save_ollama_settings};
 use pipeline::ocr_engine::OcrEngine;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,9 +51,12 @@ pub fn run() {
                 app.path().app_data_dir()?
             };
             std::fs::create_dir_all(&directory)?;
-            let db_state = db::schema::open(&directory)
-                .map_err(|e| format!("could not open the local database: {e}"))?;
-            app.manage(std::sync::Arc::new(db_state));
+            let recovery_reason=match db::schema::open(&directory) {
+                Ok(db_state)=> {app.manage(std::sync::Arc::new(db_state));None},
+                Err(error @ (db::schema::DbError::DecryptionFailed | db::schema::DbError::Keychain(crypto::keychain::KeychainError::MissingExistingCredential)))=>Some(error.to_string()),
+                Err(error)=>return Err(format!("could not open the local database: {error}").into()),
+            };
+            app.manage(RecoveryState { directory, reason:std::sync::Mutex::new(recovery_reason) });
 
             let ocr_engine = OcrEngine::load(&resources::directory_models_ocr(&app.handle()))
                 .map_err(|e| format!("could not load OCR models: {e}"))?;
@@ -69,7 +76,7 @@ pub fn run() {
                 if closing.0.swap(true, Ordering::SeqCst) {
                     return;
                 }
-                let db = app.state::<std::sync::Arc<db::DbState>>().inner().clone();
+                let Some(db)=app.try_state::<std::sync::Arc<db::DbState>>().map(|state|state.inner().clone()) else {app.exit(0);return;};
                 tauri::async_runtime::spawn(async move {
                     let result = tauri::async_runtime::spawn_blocking(move || db.seal_and_close()).await;
                     match result {
@@ -86,6 +93,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             cmd_test_ai_connection,
             cmd_create_rubric,
+            cmd_create_rubric_version,
+            cmd_load_ollama_settings,
+            cmd_save_ollama_settings,
+            cmd_export_backup,
+            cmd_restore_backup,
+            cmd_recover_workspace,
+            cmd_recovery_status,
             cmd_list_rubrics,
             cmd_list_assignments,
             cmd_load_grading_state,

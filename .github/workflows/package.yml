@@ -1,0 +1,45 @@
+name: Windows installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: installer
+      - name: Install pnpm
+        run: npm install --global pnpm@10.12.4
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify resources
+        run: pnpm verify:resources
+      - name: Test frontend
+        run: pnpm test
+      - name: Test backend
+        working-directory: src-tauri
+        run: cargo test --lib --locked
+      - name: Build Windows NSIS installer
+        run: pnpm tauri build --bundles nsis
+      - name: Upload unsigned installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: corregir-windows-x64-unsigned
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14

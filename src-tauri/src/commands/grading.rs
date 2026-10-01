@@ -8,9 +8,6 @@ use crate::pipeline::prompt_builder::{
 };
 use crate::pipeline::redaction;
 
-const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
-const DEFAULT_MODEL: &str = "qwen3:8b";
-
 fn assignment_and_criteria(
     conn: &rusqlite::Connection,
     submission_id: i64,
@@ -100,19 +97,24 @@ pub async fn cmd_request_evidence(
     db: State<'_, std::sync::Arc<DbState>>,
     submission_id: i64,
 ) -> Result<Vec<CriterionEvidence>, String> {
-    let (text_assignment, criteria, confirmed) = {
+    let (text_assignment, criteria, confirmed, settings) = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
         let conn = guard.as_ref().ok_or("the database is closed")?;
         let (text_assignment, criteria) = assignment_and_criteria(conn, submission_id)?;
         let confirmed =
             redaction::load_confirmed(conn, submission_id).map_err(|e| e.to_string())?;
-        (text_assignment, criteria, confirmed)
+        (
+            text_assignment,
+            criteria,
+            confirmed,
+            super::settings::load(conn)?,
+        )
     };
 
-    let client = InferenceClient::new(DEFAULT_OLLAMA_URL).map_err(|e| e.to_string())?;
+    let client = InferenceClient::new(settings.url.clone()).map_err(|e| e.to_string())?;
     let evidence = prompt_builder::request_evidence(
         &client,
-        DEFAULT_MODEL,
+        &settings.model,
         &text_assignment,
         &criteria,
         &confirmed,
@@ -145,7 +147,7 @@ pub async fn cmd_request_evidence(
              VALUES (?1, 'ai_evidence_request', 'ai', ?2, ?3)",
             rusqlite::params![
                 submission_id,
-                DEFAULT_MODEL,
+                settings.model,
                 serde_json::json!({"criteria_count":stored.len()}).to_string()
             ],
         )
@@ -256,7 +258,7 @@ pub async fn cmd_request_feedback(
     db: State<'_, std::sync::Arc<DbState>>,
     submission_id: i64,
 ) -> Result<FeedbackAndConsistency, String> {
-    let (text_assignment, criteria, confirmed, assessment_teacher, revision) = {
+    let (text_assignment, criteria, confirmed, assessment_teacher, revision, settings) = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
         let conn = guard.as_ref().ok_or("the database is closed")?;
         let (text_assignment, criteria) = assignment_and_criteria(conn, submission_id)?;
@@ -295,13 +297,14 @@ pub async fn cmd_request_feedback(
             confirmed,
             assessment_teacher,
             revision,
+            super::settings::load(conn)?,
         )
     };
 
-    let client = InferenceClient::new(DEFAULT_OLLAMA_URL).map_err(|e| e.to_string())?;
+    let client = InferenceClient::new(settings.url.clone()).map_err(|e| e.to_string())?;
     let feedback = prompt_builder::request_feedback(
         &client,
-        DEFAULT_MODEL,
+        &settings.model,
         &text_assignment,
         &criteria,
         &confirmed,
@@ -316,7 +319,7 @@ pub async fn cmd_request_feedback(
         let conn=guard.as_mut().ok_or("the database is closed")?;
         let tx=conn.transaction().map_err(|e|e.to_string())?;
         persist_feedback(&tx,submission_id,revision,&stored)?;
-        tx.execute("INSERT INTO logs_audit (submission_id,event,actor,model_version,payload_json) VALUES (?1,'ai_feedback_request','ai',?2,?3)",rusqlite::params![submission_id,DEFAULT_MODEL,serde_json::json!({"revision":revision,"inconsistency_count":stored.inconsistencies.len()}).to_string()]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO logs_audit (submission_id,event,actor,model_version,payload_json) VALUES (?1,'ai_feedback_request','ai',?2,?3)",rusqlite::params![submission_id,settings.model,serde_json::json!({"revision":revision,"inconsistency_count":stored.inconsistencies.len()}).to_string()]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e|e.to_string())?;
         db.persist(conn).map_err(|e|e.to_string())?;
         Ok(())

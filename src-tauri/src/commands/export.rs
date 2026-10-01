@@ -77,7 +77,7 @@ pub async fn cmd_list_logs_audit(
     .await
 }
 
-fn validate_destination(
+pub(super) fn validate_destination(
     app: &AppHandle,
     db: &DbState,
     path: &str,

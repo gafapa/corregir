@@ -87,7 +87,7 @@ export function Submissions() {
     setNotice("");
     setProgress(null);
     try {
-      const selection = await open({ multiple: false, filters: [{ name: "Documents", extensions: ["pdf", "png", "jpg", "jpeg"] }] });
+      const selection = await open({ multiple: false, filters: [{ name: "Documents", extensions: ["pdf", "docx", "png", "jpg", "jpeg"] }] });
       if (!selection || Array.isArray(selection)) return;
       const token = crypto.randomUUID();
       requestId.current = token;
@@ -130,7 +130,7 @@ export function Submissions() {
   return (
     <section aria-labelledby="submissions-title">
       <h2 id="submissions-title">Submissions</h2>
-      <p className="page-description">Reopen a saved assignment or create a new one. Import PDF, PNG, or JPEG files up to 50 MiB and 50 pages.</p>
+      <p className="page-description">Reopen a saved assignment or create a new one. Import PDF, text-only DOCX, PNG, or JPEG files up to 50 MiB. PDFs are limited to 50 pages; export complex Word documents as PDF.</p>
       <div className="assignment-layout">
       <div className="saved-work">
       <h3>Continue saved work</h3>
@@ -182,7 +182,7 @@ export function Submissions() {
       <ul className="submission-list">{submissions.map((submission) => <li className="submission-item" key={submission.id}>
         <div className="submission-heading">
           <div><h4>Submission #{submission.id}{submission.student_name ? ` — ${submission.student_name}` : ""}</h4>
-          <span className="supporting-text">{submission.method_ocr === "text_native" ? "PDF text extraction" : submission.method_ocr === "ocr_local" ? "Optical character recognition" : submission.method_ocr ?? "Extraction method unavailable"}</span></div>
+          <span className="supporting-text">{submission.method_ocr === "text_native" ? "Native text extraction" : submission.method_ocr === "ocr_local" ? "Optical character recognition" : submission.method_ocr ?? "Extraction method unavailable"}</span></div>
           <span className={`status-label ${submission.status_pipeline === "grade_confirmed" ? "status-confirmed" : submission.status_pipeline === "redacted" ? "status-reviewed" : ""}`}>
             {submission.status_pipeline === "grade_confirmed" ? "Grade confirmed" : submission.status_pipeline === "redacted" ? "Ready to grade" : "Redaction review needed"}
           </span>

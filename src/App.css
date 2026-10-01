@@ -103,6 +103,13 @@ ul { padding-left: 1.25rem; }
 li { margin-bottom: .5rem; }
 .rubric-list > li { padding-block: 1.25rem; border-top: 1px solid var(--border); }
 .rubric-list > li > ul { margin-top: .75rem; color: var(--muted); font-size: .9375rem; }
+.form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; }
+.criterion-editor { border-top: 1px solid var(--border); padding-block: .75rem; }
+.criterion-editor-fields { display: grid; grid-template-columns: 100px minmax(0, 1fr) 140px; gap: 1rem; align-items: start; }
+.criterion-editor-fields label { min-width: 0; }
+.criterion-editor-fields textarea { min-height: 84px; }
+.backup-tools { margin-top: 2rem; padding-top: .25rem; border-top: 1px solid var(--border); }
+.synthetic-rubric-tools { margin-top: 1.5rem; }
 .table-container { overflow-x: auto; margin-top: 1.25rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 table { width: 100%; text-align: left; border-collapse: collapse; font-size: .875rem; font-variant-numeric: tabular-nums; }
 th { font-weight: 600; color: var(--muted); background: var(--surface-muted); }
@@ -122,6 +129,7 @@ a { color: var(--accent); text-underline-offset: .2em; }
   .assignment-layout { grid-template-columns: 1fr; }
   .container { padding-top: 1.5rem; }
   .criterion-fields { grid-template-columns: 1fr; gap: 0; }
+  .form-grid, .criterion-editor-fields { grid-template-columns: 1fr; gap: 0; }
   .submission-item { padding: 1rem; }
   .submission-heading { flex-wrap: wrap; }
 }

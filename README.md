@@ -2,7 +2,7 @@
 
 [![Verify](https://github.com/gafapa/corregir/actions/workflows/ci.yml/badge.svg)](https://github.com/gafapa/corregir/actions/workflows/ci.yml)
 
-Corregir is a local desktop prototype for teacher-reviewed grading assistance. It imports PDF or image submissions, extracts text locally, requires a teacher to review redaction, and sends only confirmed redacted text to a local Ollama model. The teacher enters and confirms the final grade.
+Corregir is a local desktop prototype for teacher-reviewed grading assistance. It imports PDF, text-only DOCX or image submissions, extracts text locally, requires a teacher to review redaction, and sends only confirmed redacted text to a local Ollama model. The teacher enters and confirms the final grade.
 
 This repository implements Phase A with synthetic test data. The architecture and impact assessment describe the controls needed before use with real student data.
 
@@ -34,15 +34,19 @@ cargo check
 
 ## Workflow
 
-1. Create one of the synthetic rubrics and a test assignment.
-2. Import a PDF or image submission. PDFs with a text layer use native extraction; scanned pages use local OCR.
+1. Create a custom rubric or load a synthetic example, then create a test assignment. Editing a rubric creates a new version; existing assignments and grades retain their original criteria.
+2. Import a PDF, text-only DOCX or image submission. PDFs with a text layer use native extraction; scanned pages use local OCR. DOCX documents containing images, equations, automatic numbering, fields, tracked changes, headers or notes must be exported as PDF to preserve their content.
 3. Review detected identifiers, add any missed fragments, and confirm redaction.
 4. Ask the AI to locate evidence, enter your own criterion scores, and request feedback.
 5. Confirm the grade, then export the grade CSV, feedback PDF, or audit CSV.
 
 SQLite runs in memory; only authenticated AES-256-GCM snapshots are written to disk. The database credential stays in Windows Credential Manager. Every successful mutation saves an atomic encrypted snapshot, and an exclusive data-directory lock prevents competing application instances. Opening an existing encrypted database without its original credential fails without creating a replacement key.
 
-Existing Spanish schemas and newer changes in a leftover legacy working database are migrated before obsolete plaintext files are removed. Keep the encrypted database and its original credential together when planning recovery; this prototype does not implement a portable backup/credential recovery UI.
+Existing Spanish schemas and newer changes in a leftover legacy working database are migrated before obsolete plaintext files are removed. The updated encryption library retains compatibility with existing AES-GCM snapshots; a regression test verifies interoperability with the previous library.
+
+Diagnostics saves the local Ollama URL and model in the encrypted workspace. Only local HTTP endpoints are accepted. Its encrypted-backup tools export password-protected `.corregirbackup` snapshots using Argon2id (64 MiB, three iterations) and authenticated AES-256-GCM. Use a unique password of at least 12 characters and keep it separately from the backup. Ordinary restore requires an empty workspace and never replaces existing records. Backups are limited to 128 MiB.
+
+If the original device credential is unavailable or cannot decrypt the database, startup offers recovery from a previously exported backup. Recovery preserves the original encrypted file as `corregir-before-recovery-*.enc`, then seals the restored workspace with the current device credential. It restores only records included in the backup. Without the original credential or a usable backup and password, encrypted records cannot be recovered. Recovery refuses leftover legacy plaintext working files rather than discarding them.
 
 Assignments, teacher scores, comments, evidence and feedback survive restarts. Editing scores invalidates feedback; revision checks reject stale saves and AI responses. Imports run on bounded workers with page progress and cancellation after the current page finishes. Limits are 50 MiB, 50 PDF pages, 1 MiB of extracted text, image dimensions up to 6000 pixels per side and 16 million pixels overall. Ollama responses are capped at 2 MiB and 180 seconds per request, with one retry for malformed JSON. Thinking is disabled for supported models, output uses a JSON schema and generation length is bounded. The request context scales between 4096 and 32768 tokens; prompts exceeding a conservative byte budget fail before transmission.
 
@@ -55,6 +59,10 @@ The `synthetic-data` directory contains fictional rubrics and submissions, inclu
 ```sh
 python scripts/generate_synthetic_data.py
 ```
+
+## Windows installer
+
+The manually dispatched [Windows installer workflow](https://github.com/gafapa/corregir/actions/workflows/package.yml) verifies resources, runs frontend/backend tests, builds the release-profile NSIS installer and uploads it as an Actions artifact for 14 days. The installer is unsigned: trusted public distribution still requires a code-signing certificate and an authenticated signing process. No certificate or signing credentials are included in this repository.
 
 ## Documentation
 

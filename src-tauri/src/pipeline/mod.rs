@@ -1,3 +1,4 @@
+pub mod docx;
 pub mod export;
 pub mod identifiers;
 pub mod inference_client;

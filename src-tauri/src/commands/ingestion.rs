@@ -121,8 +121,9 @@ pub async fn cmd_import_submission(
         };
         match path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
             "pdf"=>render::visit_pdf(&resources::directory_pdfium(&app),path,&mut consume).map_err(|e|e.to_string())?,
+            "docx"=>consume(render::PageContent::NativeText(crate::pipeline::docx::extract(path).map_err(|error|error.to_string())?),1,1).map_err(|error|error.to_string())?,
             "png"|"jpg"|"jpeg"=>consume(render::PageContent::ImageForOcr(render::load_image(path).map_err(|e|e.to_string())?),1,1).map_err(|e|e.to_string())?,
-            _=>return Err("supported import formats are PDF, PNG, and JPEG".into()),
+            _=>return Err("supported import formats are PDF, text-only DOCX, PNG, and JPEG".into()),
         }
         job.check().map_err(|e|e.to_string())?;
         let mut guard=db.conn.lock().map_err(|e|e.to_string())?;

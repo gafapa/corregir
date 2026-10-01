@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { RecoveryPanel } from "./screens/RecoveryPanel";
 import { Audit } from "./screens/Audit";
 import { Diagnostics } from "./screens/Diagnostics";
 import { Submissions } from "./screens/Submissions";
@@ -10,6 +12,17 @@ type Tab = "diagnostics" | "rubrics" | "submissions" | "audit";
 
 function App() {
   const [tab, setTab] = useState<Tab>("submissions");
+  const [startupLoading, setStartupLoading] = useState(true);
+  const [recoveryReason, setRecoveryReason] = useState<string | null>(null);
+  const [startupError, setStartupError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void invoke<string | null>("cmd_recovery_status").then(reason => {
+      if (active) setRecoveryReason(reason);
+    }).catch(error => { if (active) setStartupError(String(error)); })
+      .finally(() => { if (active) setStartupLoading(false); });
+    return () => { active = false; };
+  }, []);
 
   const [closeError, setCloseError] = useState<string | null>(null);
   useEffect(() => {
@@ -33,7 +46,7 @@ function App() {
       </header>
       <nav className="main-navigation" aria-label="Main navigation">
         {(["submissions", "rubrics", "audit", "diagnostics"] as Tab[]).map((item) => (
-          <button key={item} aria-current={tab === item ? "page" : undefined} onClick={() => setTab(item)}>
+          <button key={item} disabled={startupLoading || !!recoveryReason || !!startupError} aria-current={tab === item ? "page" : undefined} onClick={() => setTab(item)}>
             {item === "submissions" ? "Submissions" : item === "rubrics" ? "Rubrics" : item === "audit" ? "Audit" : "Diagnostics"}
           </button>
         ))}
@@ -41,10 +54,12 @@ function App() {
       <main id="workspace" className="container" tabIndex={-1}>
         {closeError && <p role="alert">{closeError}</p>}
 
-        {tab === "rubrics" && <Rubrics />}
-        {tab === "submissions" && <Submissions />}
-        {tab === "audit" && <Audit />}
-        {tab === "diagnostics" && <Diagnostics />}
+        {startupLoading ? <p role="status">Opening workspace…</p> : startupError ? <p role="alert">Cannot open the workspace: {startupError}. Restart the application to retry.</p> : recoveryReason ? <RecoveryPanel reason={recoveryReason} /> : <>
+          {tab === "rubrics" && <Rubrics />}
+          {tab === "submissions" && <Submissions />}
+          {tab === "audit" && <Audit />}
+          {tab === "diagnostics" && <Diagnostics />}
+        </>}
       </main>
       <footer className="app-footer"><span>Teacher-reviewed grading assistance</span><span>Local desktop workspace</span></footer>
     </div>
