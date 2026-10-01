@@ -37,7 +37,7 @@ JavaScript audit: **zero known advisories**. The Rust all-platform lockfile audi
 
 `cargo tree --target x86_64-pc-windows-msvc -i glib -i proc-macro-error --locked` has no matching dependency path in the supported Windows build. These advisories are not suppressed. Builds for other targets are explicitly rejected until native resources and their dependency security review are supplied. Upgrading those transitive GTK major versions blindly would break the upstream API.
 
-Remaining product boundaries are explicit: Pdfium parses native documents inside the application process; limits and serialization do not provide a separate process sandbox. Cancellation stops between pages, not inside a native parser/OCR operation. Snapshot encryption does not protect OS paging, crash dumps, historical plaintext blocks, original documents or intentional named exports. Credential backup/recovery, signed production installers and model quality on real handwriting require separate deployment work. Model-generated advice still requires teacher review; a passing synthetic case is not a quality guarantee.
+Remaining product boundaries are explicit: Pdfium parses native documents inside the application process; limits and serialization do not provide a separate process sandbox. Cancellation stops between pages, not inside a native parser/OCR operation. Snapshot encryption does not protect OS paging, crash dumps, historical plaintext blocks, original documents or intentional named exports. Portable recovery requires a previously exported encrypted backup and its password. Trusted installer signing and model quality on real handwriting require external deployment resources and validation. Model-generated advice still requires teacher review; a passing synthetic case is not a quality guarantee.
 
 ## Validation
 
@@ -60,7 +60,18 @@ The [first hosted verification run](https://github.com/gafapa/corregir/actions/r
 
 Repository security alerts and automatic security updates are enabled. GitHub Dependabot independently confirmed that the `glib` security update cannot be resolved within the current GTK dependency requirements (`security_update_not_possible`, installed/resolvable 0.18.5 versus fixed 0.20.0). The alert remains open; the supported Windows build does not include this package. Dependency update pull requests require a passing Windows verification run before integration.
 
-Dependabot's initial proposals for `sha2` 0.11.0 and `aes-gcm` 0.11.1 failed their hosted compilation checks because of breaking APIs (digest hexadecimal formatting and nonce generation, respectively). They remain unmerged; the verified branch retains `sha2` 0.10.9 and `aes-gcm` 0.10.3. These are future migration proposals, not applied dependency updates or failures of the reviewed branch.
+The initial dependency update proposals exposed breaking APIs in digest hexadecimal formatting and nonce generation. The implementation now migrates production `sha2` and `aes-gcm` to 0.11, with explicit byte formatting and random nonce generation. A test-only alias of `aes-gcm` 0.10 verifies that existing snapshot bytes remain readable and newly persisted snapshots retain the original wire format. Argon2, ZIP and XML libraries support the new portable-backup and DOCX features. Hosted verification for these changes is recorded separately below.
+
+## Continued implementation (2026-10-02)
+
+- Custom rubric creation and immutable edited versions, with regression checks for existing assignment scores and stale version requests.
+- Persisted local Ollama server/model settings, used by both grading requests and diagnostic connection tests.
+- Text-only DOCX imports with bounded decompression/XML parsing and explicit rejection of content requiring full Word rendering.
+- Password-protected portable backups, empty-workspace restore and explicit startup recovery that archives the original encrypted snapshot.
+- A manually dispatched Windows release installer workflow. Its output is unsigned until a signing certificate and process are provisioned.
+- Browser previews with synthetic IPC fixtures cover the new editor, settings, narrow dark-mode backups and credential-recovery screen. No horizontal overflow, undersized buttons or JavaScript exceptions were observed; keyboard skip navigation and text contrast checks passed. These previews do not substitute for native credential-recovery or installation testing.
+
+Real handwriting evaluation, macOS/Linux resource bundles, signed public distribution and institutional deployment approval remain outside the implemented Phase A scope.
 
 ## Primary references
 

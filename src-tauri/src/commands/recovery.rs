@@ -33,12 +33,11 @@ pub async fn cmd_recover_workspace(
     }
     let directory = state.directory.clone();
     let password = Zeroizing::new(password);
-    let recovered = tauri::async_runtime::spawn_blocking(move || {
+    let recovered = crate::tasks::run_blocking(move || {
         let restored = super::backup::read_backup(&source_path, &password)?;
         crate::db::schema::recover(&directory, restored).map_err(|error| error.to_string())
     })
-    .await
-    .map_err(|error| error.to_string())??;
+    .await?;
     if !app.manage(std::sync::Arc::new(recovered)) {
         return Err(
             "another recovery operation already opened the workspace; restart the application"

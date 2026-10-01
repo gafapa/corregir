@@ -33,7 +33,7 @@ export function RecoveryPanel({ reason }: { reason: string }) {
       {source && <p className="path-label">{source}</p>}
       <label htmlFor="recovery-password">Backup password</label>
       <input id="recovery-password" type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} />
-      <button type="button" className="primary-button" disabled={!source || [...password].length < 12} onClick={() => void recover()}>Recover and preserve original file</button>
+      <div className="action-row"><button type="button" className="button-primary" disabled={!source || [...password].length < 12} onClick={() => void recover()}>Recover and preserve original file</button></div>
     </fieldset>
     {busy && <p role="status">Recovering workspace…</p>}
     {error && <p role="alert">{error}</p>}

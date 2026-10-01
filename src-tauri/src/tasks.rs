@@ -9,8 +9,16 @@ where
     T: Send + 'static,
     F: FnOnce(&DbState) -> Result<T, String> + Send + 'static,
 {
+    run_blocking(move || work(&db)).await
+}
+
+pub async fn run_blocking<T, F>(work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
     let _permit = WORKERS.acquire().await.map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || work(&db))
+    tauri::async_runtime::spawn_blocking(work)
         .await
         .map_err(|e| e.to_string())?
 }

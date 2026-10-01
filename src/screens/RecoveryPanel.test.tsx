@@ -1,0 +1,24 @@
+import { beforeEach, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { RecoveryPanel } from "./RecoveryPanel";
+const { invokeMock, openMock } = vi.hoisted(() => ({ invokeMock: vi.fn(), openMock: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openMock }));
+beforeEach(() => { invokeMock.mockReset(); openMock.mockReset(); });
+it("requires an explicit backup selection and clears a refused recovery password", async () => {
+  openMock.mockResolvedValue("C:\\Synthetic\\workspace.corregirbackup");
+  invokeMock.mockRejectedValue(new Error("incorrect backup password or damaged backup"));
+  const user = userEvent.setup();
+  render(<RecoveryPanel reason="The device credential is unavailable." />);
+  const button = screen.getByRole("button", { name: "Recover and preserve original file" });
+  expect(button).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "Choose backup" }));
+  await user.type(screen.getByLabelText("Backup password"), "synthetic-password");
+  expect(invokeMock).not.toHaveBeenCalled();
+  await user.click(button);
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_recover_workspace", { sourcePath: "C:\\Synthetic\\workspace.corregirbackup", password: "synthetic-password" }));
+  await waitFor(() => expect(screen.getByLabelText("Backup password")).toHaveValue(""));
+  expect(screen.getAllByRole("alert").some(node => node.textContent?.includes("incorrect backup password"))).toBe(true);
+  expect(button).toBeDisabled();
+});

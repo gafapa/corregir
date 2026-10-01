@@ -2,11 +2,11 @@
 
 **Scope decided (2026-09-21): the system aims to be adopted by the Xunta de Galicia / Galician public centers.** This sets the default architecture to **Tauri / local-first**, not PWA, and activates as mandatory (not conditional) the sections of ENS and Ley 2/2025 of Galicia of `DPIA-FRIA.md` §8. The PWA without backend remains as a demo/pilot version with synthetic data, not as a final product.
 
-## Implemented Phase A (2026-09-30)
+## Implemented Phase A (2026-10-02)
 
 The current application supports **Windows x64 MSVC** and synthetic data. The proposed stack and institutional roadmap below describe longer-term architecture; they are not a claim that every proposed component is implemented.
 
-The implemented stack is React 19, TypeScript 7 and Vite 8 inside Tauri 2.12. Pdfium 156.0.8076.0 extracts PDF text or rasterizes one page at a time; Ocrs/RTen perform local printed-text OCR. Standalone PNG/JPEG images are supported; DOCX conversion and handwriting quality are not validated. Identifier detection uses rules and a supplied roster; the teacher must review missed or indirect identifiers.
+The implemented stack is React 19, TypeScript 7 and Vite 8 inside Tauri 2.12. Pdfium 156.0.8076.0 extracts PDF text or rasterizes one page at a time; Ocrs/RTen perform local printed-text OCR. Standalone PNG/JPEG images and bounded text-only DOCX extraction are supported. DOCX images, equations, fields, automatic numbering, tracked changes, headers and notes are rejected with instructions to export as PDF. Full Word rendering and handwriting quality remain unvalidated. Identifier detection uses rules and a supplied roster; the teacher must review missed or indirect identifiers.
 
 SQLite runs in memory with foreign keys and memory-backed temporary storage. AES-256-GCM encrypted snapshots are replaced atomically after successful mutations, using a credential stored in Windows Credential Manager. A data-directory lock is acquired before credential creation or snapshot access. Legacy working copies are recovered only after an existing encrypted snapshot is authenticated, migrated, persisted, and then removed. No new plaintext SQLite database is created. Memory, operating-system paging, original source documents and deliberate named exports remain outside the snapshot encryption guarantee.
 
@@ -14,7 +14,9 @@ Ollama is the only implemented inference transport: HTTP to localhost, with prox
 
 Heavy database, import and export work runs on bounded blocking workers. Imports are serialized, report page progress and support cancellation between pages. File, page, pixel and text limits reduce resource exhaustion; Pdfium remains native code in the application process, without a separate process sandbox. Cancellation cannot interrupt a currently executing native page or OCR kernel.
 
-Assignments and assessments are reloadable. Teacher score revisions bind saved feedback to current scores and reject obsolete concurrent saves and AI responses. Grade confirmation is a backend-enforced transaction requiring reviewed text and every valid teacher score. Long feedback reports use an embedded Unicode font, wrapping and pagination. Audit exports omit payload bodies; application-data and resource destinations are protected from export writes.
+Assignments and assessments are reloadable. The custom rubric editor inserts a new version on each edit and leaves prior assignments and scores unchanged. Teacher score revisions bind saved feedback to current scores and reject obsolete concurrent saves and AI responses. Grade confirmation is a backend-enforced transaction requiring reviewed text and every valid teacher score. Long feedback reports use an embedded Unicode font, wrapping and pagination. Audit exports omit payload bodies; application-data and resource destinations are protected from export writes.
+
+Local inference settings are persisted inside the encrypted workspace. Portable backups use a versioned authenticated header, a random salt and nonce, Argon2id password derivation (64 MiB, three iterations, one lane), and AES-256-GCM encryption. Restore validates size, authentication, SQLite integrity, schema, foreign keys and local inference settings before changing state. Ordinary restore requires an empty workspace; explicit startup recovery preserves the unreadable encrypted snapshot and re-encrypts a verified backup with the current device credential. Recovery requires a previously exported backup and its password, or the original credential; lost credentials alone cannot be reconstructed. No plaintext backup files are written.
 
 Pinned resource hashes are verified during build and CI. Full licenses, model attribution and binary provenance are bundled. Only the Windows runtime has been updated and tested; the all-platform lockfile retains two GTK advisory warnings. See `PROJECT-REVIEW.md` for validation evidence and remaining external limitations.
 

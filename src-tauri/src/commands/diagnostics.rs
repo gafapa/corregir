@@ -9,14 +9,14 @@ pub async fn cmd_test_ai_connection(
     model: Option<String>,
     url: Option<String>,
 ) -> Result<String, String> {
-    let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
-    if model.trim().is_empty() || model.len() > 128 {
-        return Err("enter a model name of at most 128 bytes".into());
-    }
-    let client = InferenceClient::new(url.unwrap_or_else(|| "http://127.0.0.1:11434".into()))
-        .map_err(|e| e.to_string())?;
+    let settings = super::settings::OllamaSettings {
+        model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+        url: url.unwrap_or_else(|| "http://127.0.0.1:11434".into()),
+    };
+    settings.validate()?;
+    let client = InferenceClient::new(&settings.url).map_err(|e| e.to_string())?;
     client
-        .test_connection(&model)
+        .test_connection(&settings.model)
         .await
         .map_err(|e| e.to_string())
 }
