@@ -62,7 +62,7 @@ python scripts/generate_synthetic_data.py
 
 ## Windows installer
 
-The manually dispatched [Windows installer workflow](https://github.com/gafapa/corregir/actions/workflows/package.yml) verifies resources, runs frontend/backend tests, builds the release-profile NSIS installer and uploads it as an Actions artifact for 14 days. The installer is unsigned: trusted public distribution still requires a code-signing certificate and an authenticated signing process. No certificate or signing credentials are included in this repository.
+The manually dispatched [Windows installer workflow](https://github.com/gafapa/corregir/actions/workflows/package.yml) verifies resources, runs frontend/backend tests, builds the release-profile NSIS installer, installs it silently, verifies installed resource hashes and smoke-tests two application starts against the same encrypted workspace. It uploads the installer as an Actions artifact for 14 days. The installer is unsigned: trusted public distribution still requires a code-signing certificate and an authenticated signing process. No certificate or signing credentials are included in this repository.
 
 ## Documentation
 
