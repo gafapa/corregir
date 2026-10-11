@@ -30,7 +30,27 @@ assert.equal(folders.length, 1);
 let applicationFolder = path.join(output, 'extracted', folders[0].name);
 let processId, browser, page, launches = 0;
 const pageErrors = [];
+let hostedPolicies = [];
 async function native(command, args={}) { return page.evaluate(({command,args}) => window.__TAURI_INTERNALS__.invoke(command,args), {command,args}); }
+function configureHostedBrowser(argumentsValue, directory) {
+  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') return;
+  // Elevated WebView2 hosts ignore debugging environment overrides starting with runtime 150.
+  // Scope temporary machine policies to this executable on the disposable hosted runner only.
+  const policies = [
+    {key:'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments',value:argumentsValue},
+    {key:'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\UserDataFolder',value:directory}
+  ];
+  const entries = policies.map(item => `@{Key=${psQuote(item.key)};Value=${psQuote(item.value)}}`).join(',');
+  powershell(`$ErrorActionPreference='Stop'; $policies=@(${entries}); foreach ($policy in $policies) { if (Test-Path -LiteralPath $policy.Key) { if ((Get-ItemProperty -LiteralPath $policy.Key).PSObject.Properties['Corregir.exe']) { throw 'An existing Corregir WebView2 policy must not be overwritten.' } } }; $created=@(); try { foreach ($policy in $policies) { if (!(Test-Path -LiteralPath $policy.Key)) { New-Item -Path $policy.Key -Force | Out-Null }; New-ItemProperty -LiteralPath $policy.Key -Name 'Corregir.exe' -Value $policy.Value -PropertyType String | Out-Null; $created += $policy } } catch { foreach ($policy in $created) { Remove-ItemProperty -LiteralPath $policy.Key -Name 'Corregir.exe' }; throw }`);
+  hostedPolicies = policies;
+}
+function restoreHostedBrowser() {
+  if (!hostedPolicies.length) return;
+  for (const policy of hostedPolicies) {
+    powershell(`$ErrorActionPreference='Stop'; if (Test-Path -LiteralPath ${psQuote(policy.key)}) { $property=(Get-ItemProperty -LiteralPath ${psQuote(policy.key)}).PSObject.Properties['Corregir.exe']; if ($property) { if ($property.Value -ne ${psQuote(policy.value)}) { throw 'The temporary WebView2 policy changed unexpectedly.' }; Remove-ItemProperty -LiteralPath ${psQuote(policy.key)} -Name 'Corregir.exe' } }`);
+  }
+  hostedPolicies = [];
+}
 async function availablePort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -50,6 +70,7 @@ async function launch() {
   const stderr = path.join(output, `launch-${launches}.stderr.log`);
   const stdout = path.join(output, `launch-${launches}.stdout.log`);
   const browserArguments = `--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1${process.env.CI ? ' --disable-gpu' : ''}`;
+  configureHostedBrowser(browserArguments, browserDirectory);
   const outputHandles = [fs.openSync(stdout,'w'), fs.openSync(stderr,'w')];
   let launchError;
   try {
@@ -98,6 +119,7 @@ async function close() {
   }
   if (browser) await browser.close().catch(()=>{});
   browser = null; page = null;
+  restoreHostedBrowser();
 }
 async function unlock(password, creating=false) {
   await page.getByLabel('Work-directory password', {exact:true}).fill(password);
@@ -167,5 +189,6 @@ async function assertRecords() {
   if(page && !page.isClosed()) await page.screenshot({path:path.join(output,'failure.png'),fullPage:true}).catch(()=>{});
   console.error(error); process.exitCode=1;
 }).finally(async()=>{
-  try { await close(); } catch { if(processId) powershell(`Stop-Process -Id ${processId} -Force -ErrorAction SilentlyContinue`); }
+  try { await close(); } catch { if(processId) powershell(`$process=Get-Process -Id ${processId} -ErrorAction SilentlyContinue; if ($process) { Stop-Process -Id ${processId} -Force }`); }
+  restoreHostedBrowser();
 });
