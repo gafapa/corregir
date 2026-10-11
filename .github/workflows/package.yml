@@ -100,15 +100,25 @@ jobs:
             if ($workerStarted -and !$worker.HasExited) { $worker.Kill($true); $worker.WaitForExit() }
             $worker.Dispose()
           }
-          $dataDirectory = Join-Path $env:APPDATA 'com.corregir.desktop'
+          $dataDirectory = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'com.corregir.desktop'
+          $smokeOutput = Join-Path (Get-Location) 'output/installer-smoke'
+          New-Item -ItemType Directory -Path $smokeOutput -Force | Out-Null
           foreach ($attempt in 1..2) {
-            $process = Start-Process -FilePath $application.FullName -PassThru -WindowStyle Hidden
+            $stdoutPath = Join-Path $smokeOutput "startup-$attempt.stdout.log"
+            $stderrPath = Join-Path $smokeOutput "startup-$attempt.stderr.log"
+            $process = Start-Process -FilePath $application.FullName -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
             try {
-              Start-Sleep -Seconds 15
-              $process.Refresh()
-              if ($process.HasExited) { throw "Packaged application exited during startup: $($process.ExitCode)" }
+              $deadline = [DateTime]::UtcNow.AddSeconds(90)
+              do {
+                Start-Sleep -Milliseconds 500
+                $process.Refresh()
+                if ($process.HasExited) { throw "Packaged application exited during startup: $($process.ExitCode)" }
+              } while (!(Test-Path (Join-Path $dataDirectory 'corregir.sqlite.enc')) -and [DateTime]::UtcNow -lt $deadline)
               if (!(Test-Path (Join-Path $dataDirectory 'corregir.sqlite.enc'))) { throw 'Encrypted workspace was not created' }
               if (Test-Path (Join-Path $dataDirectory 'corregir.sqlite')) { throw 'Unexpected plaintext database' }
+              Start-Sleep -Seconds 2
+              $process.Refresh()
+              if ($process.HasExited) { throw "Packaged application exited after startup: $($process.ExitCode)" }
             } finally {
               if (!$process.HasExited) {
                 if (!$process.CloseMainWindow() -or !$process.WaitForExit(15000)) { Stop-Process -Id $process.Id -Force }
@@ -135,6 +145,7 @@ jobs:
             output/work-directory-qualification/*/launch-failure.json
             output/work-directory-qualification/*/launch-*.log
             output/work-directory-qualification/*/*.png
+            output/installer-smoke/*.log
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload portable ZIP
