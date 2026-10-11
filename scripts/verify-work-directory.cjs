@@ -1,10 +1,11 @@
 // Exercise the real normal portable ZIP with synthetic work and an isolated WebView2 profile.
 const { chromium } = require('playwright');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const net = require('node:net');
 const root = path.resolve(__dirname, '..');
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const archive = path.resolve(process.argv[2] || path.join(root, 'output', 'portable', `Corregir_${version}_windows_x64_portable.zip`));
@@ -30,19 +31,49 @@ let applicationFolder = path.join(output, 'extracted', folders[0].name);
 let processId, browser, page, launches = 0;
 const pageErrors = [];
 async function native(command, args={}) { return page.evaluate(({command,args}) => window.__TAURI_INTERNALS__.invoke(command,args), {command,args}); }
+async function availablePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  return port;
+}
 async function launch() {
   const executable = path.join(applicationFolder, 'Corregir.exe');
   assert(applicationFolder.startsWith(output + path.sep));
   assert(fs.existsSync(path.join(applicationFolder, 'corregir-portable.json')));
   assert.equal(powershell(`(Get-Item -LiteralPath ${psQuote(executable)}).VersionInfo.ProductName`), 'Corregir');
   assert.equal(powershell(`(Get-Item -LiteralPath ${psQuote(executable)}).VersionInfo.ProductVersion`), version);
-  const port = 9443 + launches++;
+  const port = await availablePort();
+  launches++;
   const browserDirectory = path.join(output, `webview-${launches}`);
-  processId = Number(powershell(`$env:WEBVIEW2_USER_DATA_FOLDER=${psQuote(browserDirectory)}; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1'; $process = Start-Process -FilePath ${psQuote(executable)} -PassThru -WindowStyle Hidden; $process.Id`));
+  const stderr = path.join(output, `launch-${launches}.stderr.log`);
+  const stdout = path.join(output, `launch-${launches}.stdout.log`);
+  const browserArguments = `--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1${process.env.CI ? ' --disable-gpu' : ''}`;
+  const outputHandles = [fs.openSync(stdout,'w'), fs.openSync(stderr,'w')];
+  let launchError;
+  try {
+    const child = spawn(executable, [], { windowsHide:true, stdio:['ignore',...outputHandles], env:{...process.env,WEBVIEW2_USER_DATA_FOLDER:browserDirectory,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:browserArguments} });
+    child.once('error', error => { launchError = String(error); });
+    processId = child.pid;
+  } finally {
+    for (const handle of outputHandles) fs.closeSync(handle);
+  }
   assert(Number.isInteger(processId) && processId > 0);
-  for (let attempt=0; attempt<100; attempt++) {
+  let connectionError;
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
     try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {timeout:1000}); break; }
-    catch { await new Promise(resolve => setTimeout(resolve,300)); }
+    catch (error) {
+      connectionError = String(error);
+      if (powershell(`if (Get-Process -Id ${processId} -ErrorAction SilentlyContinue) { 'running' }`) !== 'running') break;
+      await new Promise(resolve => setTimeout(resolve,300));
+    }
+  }
+  if (!browser) {
+    const diagnostics = { process_id:processId, port, launch_error:launchError, connection_error:connectionError, browser_profile_created:fs.existsSync(browserDirectory), stderr:fs.existsSync(stderr) ? fs.readFileSync(stderr,'utf8') : '', stdout:fs.existsSync(stdout) ? fs.readFileSync(stdout,'utf8') : '' };
+    fs.writeFileSync(path.join(output,'launch-failure.json'),JSON.stringify(diagnostics,null,2));
+    console.error(JSON.stringify(diagnostics,null,2));
   }
   assert(browser, 'portable WebView2 endpoint did not open');
   page = browser.contexts()[0].pages()[0]; page.setDefaultTimeout(20000);
