@@ -1,0 +1,40 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, expect, it, vi } from "vitest";
+import { WorkDirectory } from "./WorkDirectory";
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), open: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
+beforeEach(() => { vi.clearAllMocks(); });
+it("requires a confirmed password for a new directory and opens the selected path", async () => {
+  const user = userEvent.setup(); const opened = vi.fn();
+  mocks.invoke.mockImplementation((command: string) => command === "cmd_inspect_work_directory" ? Promise.resolve({ initialized: false, windows_bound: false }) : Promise.resolve());
+  mocks.open.mockResolvedValue("D:\\Synthetic workspace");
+  render(<WorkDirectory initialDirectory="D:\\Portable\\work" onOpened={opened} />);
+  await user.click(screen.getByRole("button", { name: "Choose directory" }));
+  await waitFor(() => expect(screen.getByLabelText("Work directory")).toHaveValue("D:\\Synthetic workspace"));
+  await user.type(screen.getByLabelText("Work-directory password"), "synthetic password");
+  expect(screen.getByRole("button", { name: "Create work directory" })).toBeDisabled();
+  await user.type(screen.getByLabelText("Confirm work-directory password"), "synthetic password");
+  await user.click(screen.getByRole("button", { name: "Create work directory" }));
+  expect(mocks.invoke).toHaveBeenCalledWith("cmd_open_work_directory", { directory: "D:\\Synthetic workspace", password: "synthetic password" });
+  expect(opened).toHaveBeenCalledOnce();
+});
+it("clears a rejected password and keeps the locked directory selectable", async () => {
+  const user = userEvent.setup(); const opened = vi.fn();
+  mocks.invoke.mockImplementation((command: string) => command === "cmd_inspect_work_directory" ? Promise.resolve({ initialized: true, windows_bound: false }) : Promise.reject("incorrect work-directory password"));
+  render(<WorkDirectory initialDirectory="D:\\Portable\\work" onOpened={opened} />);
+  const password = await screen.findByLabelText("Work-directory password");
+  await user.type(password, "incorrect password");
+  await user.click(screen.getByRole("button", { name: "Unlock work directory" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("incorrect work-directory password");
+  expect(password).toHaveValue(""); expect(opened).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Choose directory" })).toBeEnabled();
+});
+it("blocks a Windows-bound directory rather than replacing its encrypted data", async () => {
+  mocks.invoke.mockResolvedValue({ initialized: false, windows_bound: true });
+  render(<WorkDirectory initialDirectory="D:\\Existing workspace" onOpened={vi.fn()} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Existing files have not been replaced");
+  expect(screen.queryByLabelText("Work-directory password")).not.toBeInTheDocument();
+  expect(mocks.invoke).not.toHaveBeenCalledWith("cmd_open_work_directory", expect.anything());
+});

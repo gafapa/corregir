@@ -3,6 +3,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { AssignmentSummary, ImportProgress, SubmissionSummary, RubricWithCriteria } from "../lib/types";
 import { RedactionPanel } from "./RedactionPanel";
+import { DocumentReview } from "./DocumentReview";
 import { GradingPanel } from "./GradingPanel";
 
 export function Submissions() {
@@ -17,15 +18,24 @@ export function Submissions() {
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [forceOcr, setForceOcr] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [dirtyTexts, setDirtyTexts] = useState<Set<number>>(new Set());
   const currentAssignment = useRef<number | null>(null);
   const requestId = useRef<string | null>(null);
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("corregir-text-draft", { detail: dirtyTexts.size > 0 }));
+    return () => { window.dispatchEvent(new CustomEvent("corregir-text-draft", { detail: false })); };
+  }, [dirtyTexts]);
   function selectAssignment(id: number | null, list = assignments) {
     const assignment = list.find((item) => item.id === id);
     currentAssignment.current = assignment?.id ?? null;
     setAssignmentId(assignment?.id ?? null);
     if (assignment) setRubricId(assignment.rubric_id);
     setSubmissions([]);
+    setSearch(""); setStatusFilter("all"); setDirtyTexts(new Set());
     try {
       if (assignment) localStorage.setItem("corregir.activeAssignmentId", String(assignment.id));
       else localStorage.removeItem("corregir.activeAssignmentId");
@@ -93,7 +103,7 @@ export function Submissions() {
       requestId.current = token;
       const channel = new Channel<ImportProgress>();
       channel.onmessage = (message) => { if (requestId.current === message.request_id) setProgress(message); };
-      await invoke<number>("cmd_import_submission", { assignmentId: id, filePath: selection, requestId: token, onProgress: channel });
+      await invoke<number>("cmd_import_submission", { assignmentId: id, filePath: selection, requestId: token, onProgress: channel, forceOcr });
       await reloadSubmissions(id);
       const list = await invoke<AssignmentSummary[]>("cmd_list_assignments");
       setAssignments(list);
@@ -109,7 +119,7 @@ export function Submissions() {
     if (!requestId.current) return;
     try {
       await invoke("cmd_cancel_import", { requestId: requestId.current });
-      setNotice("Cancellation requested. The current page will finish before stopping.");
+      setNotice("Cancellation requested. The document worker will stop; no partial submission will be saved.");
     } catch (error) { setError(String(error)); }
   }
 
@@ -124,6 +134,19 @@ export function Submissions() {
     } catch (error) { setError(String(error)); }
   }
 
+  const filteredSubmissions = submissions.filter(item => {
+    const matchesStatus = statusFilter === "all" || item.status_pipeline === statusFilter;
+    const needle = search.trim().toLocaleLowerCase();
+    return matchesStatus && (!needle || String(item.id).includes(needle) || (item.student_name ?? "").toLocaleLowerCase().includes(needle) || (item.text_ocr ?? "").toLocaleLowerCase().includes(needle));
+  });
+  function moveToPending(id: number) {
+    const pending = filteredSubmissions.filter(item => item.status_pipeline !== "grade_confirmed");
+    const next = pending.find(item => item.id > id) ?? pending[0];
+    if (next && next.id !== id) {
+      const target = document.getElementById(`submission-${next.id}`);
+      target?.scrollIntoView({ block: "start", behavior: "auto" }); target?.focus();
+    }
+  }
   const activeRubricId = assignments.find((item) => item.id === assignmentId)?.rubric_id;
   const activeAssignment = assignments.find((item) => item.id === assignmentId);
   const criteria = rubrics.find((item) => item.id === activeRubricId)?.criteria ?? [];
@@ -135,7 +158,7 @@ export function Submissions() {
       <div className="saved-work">
       <h3>Continue saved work</h3>
       <label>Saved assignment:
-        <select value={assignmentId ?? ""} disabled={loading || importing} onChange={(event) => selectAssignment(Number(event.currentTarget.value) || null)}>
+        <select value={assignmentId ?? ""} disabled={loading || importing || dirtyTexts.size > 0} onChange={(event) => selectAssignment(Number(event.currentTarget.value) || null)}>
           <option value="">Select an assignment</option>
           {assignments.map((item) => <option key={item.id} value={item.id}>#{item.id} - {item.text.slice(0, 60)} ({item.submission_count} submissions)</option>)}
         </select>
@@ -147,11 +170,13 @@ export function Submissions() {
       </div>}
       {!loading && assignments.length === 0 && <p className="supporting-text">No saved assignments yet. Select a rubric and create your first assignment.</p>}
       {assignmentId !== null && <div className="action-row">
-        <button className="button-primary" onClick={importFile} disabled={loading || importing}>Import PDF/image</button>
-        <button onClick={exportCsv} disabled={loading || importing}>Export confirmed grades (CSV)</button>
+        <button className="button-primary" onClick={importFile} disabled={loading || importing || dirtyTexts.size > 0}>Import document</button>
+        <button onClick={exportCsv} disabled={loading || importing || dirtyTexts.size > 0}>Export confirmed grades (CSV)</button>
       </div>}
+      {assignmentId !== null && <label><input type="checkbox" checked={forceOcr} disabled={loading || importing || dirtyTexts.size > 0} onChange={event => setForceOcr(event.currentTarget.checked)} />Use OCR on every PDF page</label>}
+      {assignmentId !== null && <p className="supporting-text">Pages with images use full-page OCR automatically. Enable this option for handwritten or mixed pages that were missed. Check extracted answers against the original document before redaction.</p>}
       </div>
-      <fieldset disabled={loading || importing}>
+      <fieldset disabled={loading || importing || dirtyTexts.size > 0}>
         <legend>New assignment</legend>
         <label>Rubric:
           <select value={rubricId ?? ""} onChange={(event) => setRubricId(Number(event.currentTarget.value) || null)}>
@@ -179,7 +204,13 @@ export function Submissions() {
         <strong>{assignmentId === null ? "Choose an assignment to begin" : "Ready for the first submission"}</strong>
         <p>{assignmentId === null ? "Your saved submissions will appear here when you select an assignment." : "Import a PDF or image, review its redaction, then enter your assessment."}</p>
       </div>}
-      <ul className="submission-list">{submissions.map((submission) => <li className="submission-item" key={submission.id}>
+      {submissions.length > 0 && <div className="submission-filters">
+        <label>Search submissions<input type="search" disabled={dirtyTexts.size > 0} value={search} onChange={event => setSearch(event.currentTarget.value)} placeholder="Name, submission number or extracted text" /></label>
+        <label>Submission status<select disabled={dirtyTexts.size > 0} value={statusFilter} onChange={event => setStatusFilter(event.currentTarget.value)}><option value="all">All statuses</option><option value="ocr_complete">Redaction review needed</option><option value="redacted">Ready to grade</option><option value="grade_confirmed">Grade confirmed</option></select></label>
+        <p className="supporting-text" role="status">Showing {filteredSubmissions.length} of {submissions.length} submissions</p>
+      </div>}
+      {submissions.length > 0 && filteredSubmissions.length === 0 && <p>No submissions match these filters. Clear the search or choose another status.</p>}
+      <ul className="submission-list">{filteredSubmissions.map((submission) => <li className="submission-item" key={submission.id} id={`submission-${submission.id}`} tabIndex={-1}>
         <div className="submission-heading">
           <div><h4>Submission #{submission.id}{submission.student_name ? ` — ${submission.student_name}` : ""}</h4>
           <span className="supporting-text">{submission.method_ocr === "text_native" ? "Native text extraction" : submission.method_ocr === "ocr_local" ? "Optical character recognition" : submission.method_ocr ?? "Extraction method unavailable"}</span></div>
@@ -187,8 +218,9 @@ export function Submissions() {
             {submission.status_pipeline === "grade_confirmed" ? "Grade confirmed" : submission.status_pipeline === "redacted" ? "Ready to grade" : "Redaction review needed"}
           </span>
         </div>
-        <details><summary>Original extracted text (local only)</summary><pre>{submission.text_ocr}</pre></details>
-        <RedactionPanel submission={submission} onConfirmed={() => { void reloadSubmissions(submission.assignment_id); }} />
+        <button className="button-quiet" onClick={() => moveToPending(submission.id)} disabled={filteredSubmissions.filter(item => item.status_pipeline !== "grade_confirmed" && item.id !== submission.id).length === 0}>Next pending submission</button>
+        <DocumentReview submission={submission} onSaved={() => reloadSubmissions(submission.assignment_id)} onDraftChange={dirty => setDirtyTexts(previous => { const next = new Set(previous); if (dirty) next.add(submission.id); else next.delete(submission.id); return next; })} />
+        <RedactionPanel blocked={dirtyTexts.has(submission.id)} submission={submission} onConfirmed={() => { void reloadSubmissions(submission.assignment_id); }} />
         <GradingPanel submission={submission} criteria={criteria} onGradeConfirmed={() => { void reloadSubmissions(submission.assignment_id); }} />
       </li>)}</ul>
     </section>

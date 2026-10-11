@@ -1,0 +1,1 @@
+{"identifier":"com.corregir.qualification","productName":"Corregir Qualification","version":"0.1.1","app":{"windows":[{"title":"Corregir Qualification — Synthetic test workspace","width":1100,"height":850}]},"bundle":{"targets":["nsis"],"windows":{"nsis":{"installMode":"currentUser"}}}}

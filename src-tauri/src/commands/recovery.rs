@@ -23,6 +23,9 @@ pub async fn cmd_recover_workspace(
     source_path: String,
     password: String,
 ) -> Result<(), String> {
+    if app.state::<crate::workspace::WorkspaceState>().portable {
+        return Err("open an empty password-protected work directory, then restore the verified backup using backup tools".into());
+    }
     if app
         .try_state::<std::sync::Arc<crate::db::DbState>>()
         .is_some()

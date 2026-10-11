@@ -9,20 +9,13 @@ use crate::pipeline::review;
 pub async fn cmd_confirm_grade(
     db: State<'_, std::sync::Arc<DbState>>,
     submission_id: i64,
+    expected_revision: i64,
 ) -> Result<f64, String> {
     let db = db.inner().clone();
     crate::tasks::run(db, move |db| {
-        let total = {
-            let guard = db.conn.lock().map_err(|e| e.to_string())?;
-            let conn = guard.as_ref().ok_or("the database is closed")?;
-            {
-                let total =
-                    review::confirm_grade(conn, submission_id).map_err(|e| e.to_string())?;
-                db.persist(conn).map_err(|e| e.to_string())?;
-                total
-            }
-        };
-        Ok(total)
+        db.write(|conn| {
+            review::confirm_grade(conn, submission_id, expected_revision).map_err(|e| e.to_string())
+        })
     })
     .await
 }

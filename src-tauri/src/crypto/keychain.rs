@@ -5,7 +5,10 @@ use keyring::Entry;
 use rand::RngExt;
 use thiserror::Error;
 
+#[cfg(not(feature = "qualification"))]
 const SERVICE: &str = "corregir-desktop";
+#[cfg(feature = "qualification")]
+const SERVICE: &str = "corregir-qualification";
 const USERNAME: &str = "db-passphrase";
 
 #[derive(Debug, Error)]

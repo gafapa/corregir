@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "review_date": "2026-09-30",
+  "review_date": "2026-10-09",
   "supported_target": "x86_64-pc-windows-msvc",
   "resources": [
     {
       "path": "pdfium/bin/pdfium.dll",
-      "version": "156.0.8076.0",
-      "source": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8076/pdfium-win-x64.tgz",
+      "version": "157.0.8086.0",
+      "source": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8086/pdfium-win-x64.tgz",
       "license": "BSD-3-Clause and bundled third-party licenses",
-      "sha256": "69f1e860f6742fbaafcc4db80e785eec9a4ee0da36ea6d1dc0867ea0f18baea6",
-      "size_bytes": 7381504
+      "sha256": "1f2aee4286b8cf0413ab4562b7121aa454f9cfd9afd6ca8609bcef80927b3f80",
+      "size_bytes": 7494656
     },
     {
       "path": "fonts/Roboto-Regular.ttf",

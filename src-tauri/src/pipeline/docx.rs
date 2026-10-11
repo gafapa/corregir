@@ -1,14 +1,22 @@
 //! Bounded, local extraction of text-only Word documents. No files are unpacked.
-use super::render::{self, RenderError};
+use super::render;
+use super::render::RenderError;
 use quick_xml::{events::Event, Reader};
-use std::{io::Read, path::Path};
+use std::io::Read;
+#[cfg(test)]
+use std::path::Path;
 const MAX_XML_BYTES: u64 = 4 * 1024 * 1024;
 
+#[cfg(test)]
 pub fn extract(path: &Path) -> Result<String, RenderError> {
     render::validate_file(path)?;
     let file = std::fs::File::open(path)?;
+    extract_reader(file)
+}
+
+pub fn extract_reader<R: Read + std::io::Seek>(reader: R) -> Result<String, RenderError> {
     let mut archive =
-        zip::ZipArchive::new(file).map_err(|error| RenderError::Processing(error.to_string()))?;
+        zip::ZipArchive::new(reader).map_err(|error| RenderError::Processing(error.to_string()))?;
     if archive.len() > 2000 {
         return Err(RenderError::LimitExceeded);
     }
@@ -72,8 +80,8 @@ fn parse_text(xml: &str) -> Result<String, RenderError> {
                     return Err(RenderError::LimitExceeded);
                 }
                 match tag.local_name().as_ref() {
-                    "ins" | "del" | "moveFrom" | "moveTo" | "drawing" | "object" | "pict" | "altChunk" | "fldChar" | "fldSimple" | "oMath" | "oMathPara" | "numPr" => return Err(RenderError::Processing("accept tracked changes and convert drawings, equations, automatic numbering or fields to plain text, or export this DOCX as PDF".into())),
-                    "t" => in_text = true,
+                    "sym" | "AlternateContent" | "ins" | "del" | "moveFrom" | "moveTo" | "drawing" | "object" | "pict" | "altChunk" | "fldChar" | "fldSimple" | "oMath" | "oMathPara" | "numPr" => return Err(RenderError::Processing("accept tracked changes and convert symbols, drawings, equations, automatic numbering or fields to plain text, or export this DOCX as PDF".into())),
+                    "t" => in_text = matches!(event, Event::Start(_)),
                     "tab" => text.push('\t'),
                     "br" | "cr" => text.push('\n'),
                     _ => ()
@@ -89,6 +97,7 @@ fn parse_text(xml: &str) -> Result<String, RenderError> {
                 }
             }
             Event::Text(value) if in_text => text.push_str(&value.xml10_content()),
+            Event::CData(value) if in_text => text.push_str(&value.xml10_content()),
             Event::GeneralRef(value) if in_text => {
                 let name: &str = value.as_ref();
                 let escaped = format!("&{name};");
@@ -131,6 +140,25 @@ mod tests {
         assert_eq!(extract(&path).unwrap(), "Poésía & Ω\nCell");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
+    #[test]
+    fn preserves_cdata_and_does_not_read_text_outside_empty_text_elements() {
+        assert_eq!(
+            parse_text("<w:p><w:t><![CDATA[Ω < 2 & 3]]></w:t><w:t/>ignored<w:t> end</w:t></w:p>")
+                .unwrap(),
+            "Ω < 2 & 3 end"
+        );
+    }
+
+    #[test]
+    fn refuses_symbols_and_alternate_content_instead_of_omitting_them() {
+        for fragment in [
+            "<w:sym w:font='Symbol' w:char='F061'/>",
+            "<mc:AlternateContent><mc:Choice><w:t>choice</w:t></mc:Choice></mc:AlternateContent>",
+        ] {
+            assert!(parse_text(&format!("<w:p><w:t>Answer: </w:t>{fragment}</w:p>")).is_err());
+        }
+    }
+
     #[test]
     fn refuses_revisions_objects_entities_and_incomplete_xml() {
         for xml in [

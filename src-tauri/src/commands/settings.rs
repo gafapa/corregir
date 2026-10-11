@@ -68,10 +68,10 @@ pub async fn cmd_save_ollama_settings(
 ) -> Result<(), String> {
     crate::tasks::run(db.inner().clone(), move |db| {
         settings.validate()?;
-        let guard = db.conn.lock().map_err(|error| error.to_string())?;
-        let conn = guard.as_ref().ok_or("the database is closed")?;
+        db.write(|conn| {
         conn.execute("INSERT INTO configuration (key,value) VALUES ('ollama',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(&settings).map_err(|error| error.to_string())?]).map_err(|error| error.to_string())?;
-        db.persist(conn).map_err(|error| error.to_string())
+        Ok(())
+        })
     }).await
 }
 

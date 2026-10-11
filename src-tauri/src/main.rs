@@ -2,5 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--document-worker") {
+        std::process::exit(tauri_app_lib::run_document_worker());
+    }
     tauri_app_lib::run()
 }

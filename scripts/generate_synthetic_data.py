@@ -101,6 +101,9 @@ create_text_pdf(DATA_DIR / "language-student-2-text.pdf", language_student_2, fo
 create_scanned_pdf(
     DATA_DIR / "language-student-2-text.pdf", DATA_DIR / "language-student-2-scanned.pdf"
 )
+with fitz.open(DATA_DIR / "language-student-2-scanned.pdf") as mixed:
+    mixed[0].insert_text((40, 25), "Native header above a scanned answer", fontsize=12)
+    mixed.save(DATA_DIR / "language-student-2-mixed.pdf")
 
 # Example 2: physics and chemistry, Year 10.
 physics_assignment = [

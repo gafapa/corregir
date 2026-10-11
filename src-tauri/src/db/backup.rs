@@ -39,9 +39,10 @@ pub fn encrypt(conn: &Connection, password: &str) -> Result<Vec<u8>, String> {
     let key = derive(password, &header[8..24])?;
     let cipher = Aes256Gcm::new_from_slice(key.as_ref())
         .map_err(|_| "could not initialize backup encryption")?;
+    let nonce = Nonce::try_from(&header[24..36]).map_err(|_| "invalid backup nonce")?;
     let encrypted = cipher
         .encrypt(
-            Nonce::from_slice(&header[24..36]),
+            &nonce,
             Payload {
                 msg: &plain,
                 aad: &header,
@@ -63,10 +64,11 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Connection, String> {
     let key = derive(password, &bytes[8..24])?;
     let cipher = Aes256Gcm::new_from_slice(key.as_ref())
         .map_err(|_| "could not initialize backup encryption")?;
+    let nonce = Nonce::try_from(&bytes[24..36]).map_err(|_| "invalid backup nonce")?;
     let plain = Zeroizing::new(
         cipher
             .decrypt(
-                Nonce::from_slice(&bytes[24..36]),
+                &nonce,
                 Payload {
                     msg: &bytes[HEADER_BYTES..],
                     aad: &bytes[..HEADER_BYTES],

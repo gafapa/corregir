@@ -17,12 +17,11 @@ pub async fn cmd_export_csv(
     let db = db.inner().clone();
     crate::tasks::run(db, move |db| {
         let destination = validate_destination(&app, db, &destination_path, "csv")?;
-        let guard = db.conn.lock().map_err(|e| e.to_string())?;
-        let conn = guard.as_ref().ok_or("the database is closed")?;
-        let rows =
-            export::generate_csv(conn, assignment_id, &destination).map_err(|e| e.to_string())?;
-        db.persist(conn).map_err(|e| e.to_string())?;
-        Ok(rows)
+        db.write(|conn| {
+            let rows = export::generate_csv(conn, assignment_id, &destination)
+                .map_err(|e| e.to_string())?;
+            Ok(rows)
+        })
     })
     .await
 }

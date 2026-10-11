@@ -96,7 +96,11 @@ fn id_and_max_of_criterion(
 pub async fn cmd_request_evidence(
     db: State<'_, std::sync::Arc<DbState>>,
     submission_id: i64,
+    jobs: State<'_, std::sync::Arc<crate::inference_jobs::InferenceJobs>>,
+    request_id: String,
+    on_progress: tauri::ipc::Channel<crate::inference_jobs::InferenceProgress>,
 ) -> Result<Vec<CriterionEvidence>, String> {
+    let mut job = jobs.inner().begin(request_id, Some(on_progress)).await?;
     let (text_assignment, criteria, confirmed, settings) = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
         let conn = guard.as_ref().ok_or("the database is closed")?;
@@ -112,20 +116,26 @@ pub async fn cmd_request_evidence(
     };
 
     let client = InferenceClient::new(settings.url.clone()).map_err(|e| e.to_string())?;
-    let evidence = prompt_builder::request_evidence(
-        &client,
-        &settings.model,
-        &text_assignment,
-        &criteria,
-        &confirmed,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let evidence = job
+        .run(async {
+            prompt_builder::request_evidence(
+                &client,
+                &settings.model,
+                &text_assignment,
+                &criteria,
+                &confirmed,
+            )
+            .await
+            .map_err(|e| e.to_string())
+        })
+        .await?;
+
+    job.check()?;
+    job.report("saving");
 
     let stored = evidence.clone();
     crate::tasks::run(db.inner().clone(),move|db| {
-        let mut guard = db.conn.lock().map_err(|e| e.to_string())?;
-        let connection = guard.as_mut().ok_or("the database is closed")?;
+        db.write(|connection| {
         let tx = connection.transaction().map_err(|e| e.to_string())?;
         let conn = &tx;
         redaction::load_confirmed(conn, submission_id).map_err(|e| e.to_string())?;
@@ -153,8 +163,8 @@ pub async fn cmd_request_evidence(
         )
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
-        db.persist(connection).map_err(|e|e.to_string())?;
         Ok(())
+        })
     }).await?;
 
     Ok(evidence)
@@ -211,11 +221,10 @@ pub async fn cmd_save_grade_tentative(
     assessments: Vec<CriterionAssessment>,
 ) -> Result<i64, String> {
     crate::tasks::run(db.inner().clone(), move |db| {
-        let mut guard = db.conn.lock().map_err(|e| e.to_string())?;
-        let conn = guard.as_mut().ok_or("the database is closed")?;
-        save_assessments(conn, submission_id, expected_revision, &assessments)?;
-        db.persist(conn).map_err(|e| e.to_string())?;
-        Ok(expected_revision + 1)
+        db.write(|conn| {
+            save_assessments(conn, submission_id, expected_revision, &assessments)?;
+            Ok(expected_revision + 1)
+        })
     })
     .await
 }
@@ -257,7 +266,11 @@ pub async fn cmd_load_grading_state(
 pub async fn cmd_request_feedback(
     db: State<'_, std::sync::Arc<DbState>>,
     submission_id: i64,
+    jobs: State<'_, std::sync::Arc<crate::inference_jobs::InferenceJobs>>,
+    request_id: String,
+    on_progress: tauri::ipc::Channel<crate::inference_jobs::InferenceProgress>,
 ) -> Result<FeedbackAndConsistency, String> {
+    let mut job = jobs.inner().begin(request_id, Some(on_progress)).await?;
     let (text_assignment, criteria, confirmed, assessment_teacher, revision, settings) = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
         let conn = guard.as_ref().ok_or("the database is closed")?;
@@ -302,27 +315,33 @@ pub async fn cmd_request_feedback(
     };
 
     let client = InferenceClient::new(settings.url.clone()).map_err(|e| e.to_string())?;
-    let feedback = prompt_builder::request_feedback(
-        &client,
-        &settings.model,
-        &text_assignment,
-        &criteria,
-        &confirmed,
-        &assessment_teacher,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let feedback = job
+        .run(async {
+            prompt_builder::request_feedback(
+                &client,
+                &settings.model,
+                &text_assignment,
+                &criteria,
+                &confirmed,
+                &assessment_teacher,
+            )
+            .await
+            .map_err(|e| e.to_string())
+        })
+        .await?;
+
+    job.check()?;
+    job.report("saving");
 
     let stored = feedback.clone();
     crate::tasks::run(db.inner().clone(),move|db| {
-        let mut guard=db.conn.lock().map_err(|e|e.to_string())?;
-        let conn=guard.as_mut().ok_or("the database is closed")?;
+        db.write(|conn| {
         let tx=conn.transaction().map_err(|e|e.to_string())?;
         persist_feedback(&tx,submission_id,revision,&stored)?;
         tx.execute("INSERT INTO logs_audit (submission_id,event,actor,model_version,payload_json) VALUES (?1,'ai_feedback_request','ai',?2,?3)",rusqlite::params![submission_id,settings.model,serde_json::json!({"revision":revision,"inconsistency_count":stored.inconsistencies.len()}).to_string()]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e|e.to_string())?;
-        db.persist(conn).map_err(|e|e.to_string())?;
         Ok(())
+        })
     }).await?;
 
     Ok(feedback)

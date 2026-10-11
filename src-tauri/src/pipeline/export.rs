@@ -426,7 +426,7 @@ mod tests {
             rusqlite::params![submission_one, criterion_id],
         )
         .unwrap();
-        review::confirm_grade(conn, submission_one).unwrap();
+        review::confirm_grade(conn, submission_one, 0).unwrap();
 
         // Submission 2: still not confirmed, MUST NOT appear in the CSV.
         conn.execute(
@@ -492,7 +492,7 @@ mod tests {
             rusqlite::params![submission_id, criterion_id],
         )
         .unwrap();
-        review::confirm_grade(conn, submission_id).unwrap();
+        review::confirm_grade(conn, submission_id, 0).unwrap();
         conn.execute(
             "INSERT INTO logs_audit (submission_id, event, actor, payload_json)
              VALUES (?1, 'ai_feedback_request', 'ai', ?2)",

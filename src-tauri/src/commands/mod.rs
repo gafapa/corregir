@@ -8,3 +8,5 @@ pub mod recovery;
 pub mod redaction;
 pub mod review;
 pub mod settings;
+
+pub mod document_review;

@@ -1,5 +1,5 @@
 import { findManualSpans } from "../lib/redaction";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IdentifierCandidate, SubmissionSummary } from "../lib/types";
 
@@ -9,9 +9,11 @@ import { IdentifierCandidate, SubmissionSummary } from "../lib/types";
 export function RedactionPanel({
   submission,
   onConfirmed,
+  blocked = false,
 }: {
   submission: SubmissionSummary;
   onConfirmed: () => void;
+  blocked?: boolean;
 }) {
   const [roster, setRoster] = useState("");
   const [candidates, setCandidates] = useState<IdentifierCandidate[]>([]);
@@ -21,8 +23,23 @@ export function RedactionPanel({
   const [result, setResult] = useState<{ alias: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ text: string; alias: string } | null>(null);
+  const [reviewed, setReviewed] = useState(false);
+  useEffect(() => { setCandidates([]); setAccepted(new Set()); setPreview(null); setReviewed(false); }, [submission.text_ocr, blocked]);
+  function invalidatePreview() { setPreview(null); setReviewed(false); }
+  function selectedSpans(): [number, number][] {
+    return [...candidates.filter((_, i) => accepted.has(i)).map((candidate): [number, number] => [candidate.start, candidate.end]), ...findManualSpans(submission.text_ocr ?? "", manual)];
+  }
+  async function previewRedaction() {
+    setBusy(true); setError(null); invalidatePreview();
+    try {
+      const result = await invoke<{ text: string; alias: string }>("cmd_preview_redaction", { submissionId: submission.id, spans: selectedSpans(), studentName });
+      setPreview(result);
+    } catch (error) { setError(String(error)); } finally { setBusy(false); }
+  }
 
   async function detect() {
+    invalidatePreview();
     setError(null);
     setBusy(true);
     try {
@@ -44,6 +61,7 @@ export function RedactionPanel({
   }
 
   function toggle(index: number) {
+    invalidatePreview();
     setAccepted((prev) => {
       const copy = new Set(prev);
       if (copy.has(index)) copy.delete(index);
@@ -53,6 +71,8 @@ export function RedactionPanel({
   }
 
   async function confirm() {
+    if (blocked) return;
+    if (!preview || !reviewed) { setError("Generate and review the redacted text before confirming."); return; }
     if (!studentName.trim()) {
       setError("Enter the student's real name. It stays local until you export a grading report.");
       return;
@@ -60,15 +80,14 @@ export function RedactionPanel({
     setError(null);
     setBusy(true);
     try {
-      const spans: [number, number][] = [
-        ...candidates.filter((_, i) => accepted.has(i)).map((c): [number, number] => [c.start, c.end]),
-        ...findManualSpans(submission.text_ocr ?? "", manual),
-      ];
+      const spans = selectedSpans();
       const alias = await invoke<string>("cmd_confirm_redaction", {
         submissionId: submission.id,
         spans,
         studentName,
         studentClassId: null,
+        previewAlias: preview.alias,
+        previewText: preview.text,
       });
       setResult({ alias });
       onConfirmed();
@@ -85,18 +104,19 @@ export function RedactionPanel({
 
   return (
     <div className="review-panel">
+      {blocked && <p className="warning-text">Save or discard text corrections before reviewing redaction.</p>}
       <h4>Redact submission #{submission.id}</h4>
 
       <label>
         Class roster (one full name per line or comma separated):
         <textarea
-          disabled={busy}
+          disabled={busy || blocked}
           value={roster}
-          onChange={(e) => setRoster(e.currentTarget.value)}
+          onChange={(e) => { setRoster(e.currentTarget.value); invalidatePreview(); }}
           rows={2}
         />
       </label>
-      <button onClick={detect} disabled={busy}>Detect identifiers</button>
+      <button onClick={detect} disabled={busy || blocked}>Detect identifiers</button>
 
       {candidates.length > 0 && (
         <>
@@ -107,7 +127,7 @@ export function RedactionPanel({
                 <label>
                   <input
                     type="checkbox"
-                    disabled={busy}
+                    disabled={busy || blocked}
                     checked={accepted.has(i)}
                     onChange={() => toggle(i)}
                   />{" "}
@@ -122,19 +142,26 @@ export function RedactionPanel({
       <label>
         Additional text to redact (one exact fragment per line):
         <textarea
-          disabled={busy}
+          disabled={busy || blocked}
           value={manual}
-          onChange={(e) => setManual(e.currentTarget.value)}
+          onChange={(e) => { setManual(e.currentTarget.value); invalidatePreview(); }}
           rows={2}
         />
       </label>
 
       <label>
-        Student's real name (stored locally, never sent to the AI):
-        <input disabled={busy} value={studentName} onChange={(e) => setStudentName(e.currentTarget.value)} />
+        Student's real name (stored locally; full-name matches are redacted automatically):
+        <input maxLength={200} disabled={busy || blocked} value={studentName} onChange={(e) => { setStudentName(e.currentTarget.value); invalidatePreview(); }} />
       </label>
 
-      <div className="action-row"><button className="button-primary" onClick={confirm} disabled={busy}>Confirm redaction</button></div>
+      <p className="supporting-text">Review OCR against the original document first. Check name variants, OCR mistakes and other identifiers in the preview; automatic detection cannot find every identifier.</p>
+      <div className="action-row"><button onClick={previewRedaction} disabled={busy || blocked || !studentName.trim()}>Preview redacted text</button></div>
+      {preview && <div className="redaction-preview">
+        <h5>Submission text that Ollama will receive</h5>
+        <pre className="document-preview" tabIndex={0} aria-label="Redacted submission preview">{preview.text}</pre>
+        <label><input type="checkbox" checked={reviewed} disabled={busy || blocked} onChange={event => setReviewed(event.currentTarget.checked)} />I checked this text for remaining identifiers.</label>
+      </div>}
+      <div className="action-row"><button className="button-primary" onClick={confirm} disabled={busy || blocked || !preview || !reviewed}>Confirm redaction</button></div>
 
       {error && <pre role="alert">{error}</pre>}
       {result && (

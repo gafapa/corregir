@@ -20,6 +20,10 @@ pub enum RedactionError {
     InvalidSpan,
     #[error("submission {0} has already passed redaction review")]
     AlreadyReviewed(i64),
+    #[error("enter a student name of between 1 and 200 bytes")]
+    InvalidName,
+    #[error("the redaction preview changed; generate and review it again")]
+    InvalidPreview,
     #[error("database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 }
@@ -92,12 +96,109 @@ fn redact(text: &str, spans: &[(usize, usize)], alias: &str) -> String {
 }
 
 /// Persist the teacher-approved redaction and local alias-to-student map.
+#[cfg(test)]
 pub fn confirm(
     conn: &Connection,
     submission_id: i64,
     spans_to_redact: &[(usize, usize)],
     student_name: &str,
     student_class_id: Option<&str>,
+) -> Result<ConfirmedRedactedText, RedactionError> {
+    confirm_internal(
+        conn,
+        submission_id,
+        spans_to_redact,
+        student_name,
+        student_class_id,
+        None,
+    )
+}
+
+#[derive(serde::Serialize)]
+pub struct RedactionPreview {
+    pub text: String,
+    pub alias: String,
+}
+
+fn reviewed_spans(
+    text: &str,
+    spans: &[(usize, usize)],
+    student_name: &str,
+) -> Result<Vec<(usize, usize)>, RedactionError> {
+    let name = student_name.trim();
+    if name.is_empty() || name.len() > 200 {
+        return Err(RedactionError::InvalidName);
+    }
+    for &(start, end) in spans {
+        if start >= end
+            || end > text.len()
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+        {
+            return Err(RedactionError::InvalidSpan);
+        }
+    }
+    let mut combined = spans.to_vec();
+    let pattern = regex::RegexBuilder::new(&regex::escape(name))
+        .case_insensitive(true)
+        .build()
+        .map_err(|_| RedactionError::InvalidName)?;
+    combined.extend(
+        pattern
+            .find_iter(text)
+            .map(|value| (value.start(), value.end())),
+    );
+    Ok(merge_spans(&combined))
+}
+
+pub fn preview(
+    conn: &Connection,
+    submission_id: i64,
+    spans: &[(usize, usize)],
+    student_name: &str,
+) -> Result<RedactionPreview, RedactionError> {
+    let (text, status): (String, String) = conn.query_row(
+        "SELECT text_ocr,status_pipeline FROM submissions WHERE id=?1",
+        [submission_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if status != "ocr_complete" {
+        return Err(RedactionError::AlreadyReviewed(submission_id));
+    }
+    let reviewed = reviewed_spans(&text, spans, student_name)?;
+    let alias = generate_alias_unique(conn)?;
+    Ok(RedactionPreview {
+        text: redact(&text, &reviewed, &alias),
+        alias,
+    })
+}
+
+pub fn confirm_preview(
+    conn: &Connection,
+    submission_id: i64,
+    spans: &[(usize, usize)],
+    student_name: &str,
+    student_class_id: Option<&str>,
+    alias: &str,
+    expected_text: &str,
+) -> Result<ConfirmedRedactedText, RedactionError> {
+    confirm_internal(
+        conn,
+        submission_id,
+        spans,
+        student_name,
+        student_class_id,
+        Some((alias, expected_text)),
+    )
+}
+
+fn confirm_internal(
+    conn: &Connection,
+    submission_id: i64,
+    spans_to_redact: &[(usize, usize)],
+    student_name: &str,
+    student_class_id: Option<&str>,
+    expected: Option<(&str, &str)>,
 ) -> Result<ConfirmedRedactedText, RedactionError> {
     let tx = conn.unchecked_transaction()?;
     let status: String = tx.query_row(
@@ -117,18 +218,28 @@ pub fn confirm(
         .map_err(|_| RedactionError::SubmissionNotFound(submission_id))?;
     let text_original = text_original.ok_or(RedactionError::MissingOcrText(submission_id))?;
 
-    for &(start, end) in spans_to_redact {
-        if start >= end
-            || end > text_original.len()
-            || !text_original.is_char_boundary(start)
-            || !text_original.is_char_boundary(end)
+    let reviewed = reviewed_spans(&text_original, spans_to_redact, student_name)?;
+    let alias = match expected {
+        Some((alias, _))
+            if alias.len() == 8 && alias.bytes().all(|value| value.is_ascii_hexdigit()) =>
         {
-            return Err(RedactionError::InvalidSpan);
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM alias_student_map WHERE alias=?1)",
+                [alias],
+                |row| row.get(0),
+            )?;
+            if exists {
+                return Err(RedactionError::InvalidPreview);
+            }
+            alias.to_string()
         }
+        Some(_) => return Err(RedactionError::InvalidPreview),
+        None => generate_alias_unique(conn)?,
+    };
+    let text_redacted = redact(&text_original, &reviewed, &alias);
+    if expected.is_some_and(|(_, text)| text != text_redacted) {
+        return Err(RedactionError::InvalidPreview);
     }
-
-    let alias = generate_alias_unique(conn)?;
-    let text_redacted = redact(&text_original, spans_to_redact, &alias);
 
     conn.execute(
         "UPDATE submissions SET text_redacted = ?1, alias = ?2, status_pipeline = 'redacted' WHERE id = ?3",
@@ -142,7 +253,7 @@ pub fn confirm(
         "INSERT INTO logs_audit (submission_id, event, actor, payload_json) VALUES (?1, 'redaction_confirmed', 'teacher', ?2)",
         rusqlite::params![
             submission_id,
-            serde_json::json!({ "redacted_span_count": spans_to_redact.len() }).to_string()
+            serde_json::json!({ "redacted_span_count": reviewed.len() }).to_string()
         ],
     )?;
 
@@ -188,6 +299,43 @@ mod tests {
     use super::*;
     use crate::db::schema;
     use tempfile::tempdir;
+    #[test]
+    fn preview_automatically_redacts_known_names_and_rejects_a_changed_review() {
+        let directory = tempdir().unwrap();
+        let state = schema::open_with_key(directory.path(), [9; 32]).unwrap();
+        let guard = state.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
+        let id = prepare_test_submission(conn, "JOSÉ 😀 explains the answer. José signs it.");
+        let reviewed = preview(conn, id, &[], " José ").unwrap();
+        assert!(!reviewed.text.contains("JOSÉ"));
+        assert!(!reviewed.text.contains("José"));
+        assert!(reviewed.text.contains("😀 explains the answer."));
+        assert!(matches!(
+            confirm_preview(
+                conn,
+                id,
+                &[],
+                "Another name",
+                None,
+                &reviewed.alias,
+                &reviewed.text
+            ),
+            Err(RedactionError::InvalidPreview)
+        ));
+        assert!(load_confirmed(conn, id).is_err());
+        let confirmed = confirm_preview(
+            conn,
+            id,
+            &[],
+            " José ",
+            None,
+            &reviewed.alias,
+            &reviewed.text,
+        )
+        .unwrap();
+        assert_eq!(confirmed.text(), reviewed.text);
+        assert!(preview(conn, id, &[], "José").is_err());
+    }
 
     fn prepare_test_submission(conn: &Connection, text_ocr: &str) -> i64 {
         conn.execute(

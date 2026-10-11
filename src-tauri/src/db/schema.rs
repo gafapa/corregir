@@ -1,7 +1,7 @@
 //! SQLite lives in memory. Only authenticated encrypted snapshots reach disk.
 use crate::crypto::keychain::{self, KeychainError};
 use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
 use fs2::FileExt;
 use rand::RngExt;
 use rusqlite::{Connection, MAIN_DB};
@@ -47,6 +47,40 @@ pub struct DbState {
 }
 
 impl DbState {
+    /// Mutate an isolated in-memory copy and publish it only after durable persistence.
+    pub fn write<T>(
+        &self,
+        work: impl FnOnce(&mut Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.write_with_persist(work, |connection| {
+            self.persist(connection).map_err(|error| error.to_string())
+        })
+    }
+
+    fn write_with_persist<T>(
+        &self,
+        work: impl FnOnce(&mut Connection) -> Result<T, String>,
+        persist: impl FnOnce(&Connection) -> Result<(), String>,
+    ) -> Result<T, String> {
+        let mut guard = self.conn.lock().map_err(|error| error.to_string())?;
+        let current = guard.as_ref().ok_or("the database is closed")?;
+        let mut staged = Connection::open_in_memory().map_err(|error| error.to_string())?;
+        {
+            let copy = rusqlite::backup::Backup::new(current, &mut staged)
+                .map_err(|error| error.to_string())?;
+            copy.run_to_completion(128, std::time::Duration::ZERO, None)
+                .map_err(|error| error.to_string())?;
+        }
+        staged.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=MEMORY;").map_err(|error| error.to_string())?;
+        let result = work(&mut staged)?;
+        if !staged.is_autocommit() {
+            return Err("workspace mutation left an unfinished transaction".into());
+        }
+        persist(&staged)?;
+        *guard = Some(staged);
+        Ok(result)
+    }
+
     pub fn seal(&self) -> Result<(), DbError> {
         let guard = self.conn.lock().map_err(|_| DbError::PoisonedMutex)?;
         if let Some(conn) = guard.as_ref() {
@@ -60,7 +94,8 @@ impl DbState {
         if data.len() as u64 > MAX_DATABASE_BYTES {
             return Err(DbError::InvalidDatabase);
         }
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(self.key.as_ref()));
+        let cipher =
+            Aes256Gcm::new_from_slice(self.key.as_ref()).map_err(|_| DbError::InvalidPassphrase)?;
         let mut nonce_bytes = [0u8; 12];
         rand::rng().fill(&mut nonce_bytes);
         let nonce = Nonce::from(nonce_bytes);
@@ -103,9 +138,10 @@ fn decrypt(path: &Path, key: &[u8; 32]) -> Result<Zeroizing<Vec<u8>>, DbError> {
     if content.len() < 28 {
         return Err(DbError::DecryptionFailed);
     }
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| DbError::InvalidPassphrase)?;
+    let nonce = Nonce::try_from(&content[..12]).map_err(|_| DbError::DecryptionFailed)?;
     cipher
-        .decrypt(Nonce::from_slice(&content[..12]), &content[12..])
+        .decrypt(&nonce, &content[12..])
         .map(Zeroizing::new)
         .map_err(|_| DbError::DecryptionFailed)
 }
@@ -177,7 +213,7 @@ pub fn open_with_key(directory: &Path, key: [u8; 32]) -> Result<DbState, DbError
     open_locked(directory, key, directory_lock)
 }
 
-fn lock_directory(directory: &Path) -> Result<File, DbError> {
+pub(crate) fn lock_directory(directory: &Path) -> Result<File, DbError> {
     fs::create_dir_all(directory)?;
     let directory_lock = OpenOptions::new()
         .read(true)
@@ -191,7 +227,11 @@ fn lock_directory(directory: &Path) -> Result<File, DbError> {
     Ok(directory_lock)
 }
 
-fn open_locked(directory: &Path, key: [u8; 32], directory_lock: File) -> Result<DbState, DbError> {
+pub(crate) fn open_locked(
+    directory: &Path,
+    key: [u8; 32],
+    directory_lock: File,
+) -> Result<DbState, DbError> {
     let path_encrypted = directory.join(ENCRYPTED_DB_NAME);
     let mut conn = Connection::open_in_memory()?;
     // Authenticate the existing snapshot before considering a legacy working copy.
@@ -265,6 +305,138 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     const KEY: [u8; 32] = [42; 32];
+    #[cfg(windows)]
+    #[test]
+    fn an_actual_windows_replacement_failure_never_publishes_the_mutation() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempdir().unwrap();
+        let state = open_with_key(directory.path(), KEY).unwrap();
+        let path = directory.path().join(ENCRYPTED_DB_NAME);
+        let before = fs::read(&path).unwrap();
+        // FILE_SHARE_READ permits readback but denies replacement while this handle lives.
+        let locked = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        assert!(state
+            .write(|conn| {
+                conn.execute(
+                    "INSERT INTO configuration VALUES ('not-published','value')",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(
+            state
+                .conn
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM configuration WHERE key='not-published'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        drop(locked);
+        drop(state);
+        let reopened = open_with_key(directory.path(), KEY).unwrap();
+        assert_eq!(
+            reopened
+                .conn
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM configuration WHERE key='not-published'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn durable_mutations_keep_memory_and_disk_unchanged_on_failure() {
+        let directory = tempdir().unwrap();
+        let state = open_with_key(directory.path(), KEY).unwrap();
+        let before = fs::read(directory.path().join(ENCRYPTED_DB_NAME)).unwrap();
+        for stage in ["write", "sync", "replace"] {
+            let result = state.write_with_persist(
+                |conn| {
+                    conn.execute(
+                        "INSERT INTO configuration VALUES ('failure-proof','value')",
+                        [],
+                    )
+                    .map_err(|error| error.to_string())?;
+                    Ok(())
+                },
+                |_| Err(format!("injected {stage} failure")),
+            );
+            assert!(result.is_err());
+            let count: i64 = state
+                .conn
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM configuration WHERE key='failure-proof'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0);
+            assert_eq!(
+                fs::read(directory.path().join(ENCRYPTED_DB_NAME)).unwrap(),
+                before
+            );
+        }
+        assert!(state
+            .write::<()>(|conn| {
+                conn.execute(
+                    "INSERT INTO configuration VALUES ('failure-proof','value')",
+                    [],
+                )
+                .unwrap();
+                Err("invalid later operation".into())
+            })
+            .is_err());
+        state
+            .write(|conn| {
+                conn.execute(
+                    "INSERT INTO configuration VALUES ('failure-proof','saved')",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        drop(state);
+        let reopened = open_with_key(directory.path(), KEY).unwrap();
+        let value: String = reopened
+            .conn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM configuration WHERE key='failure-proof'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "saved");
+        assert!(!directory.path().join("corregir.sqlite").exists());
+    }
     #[test]
     fn explicit_recovery_preserves_the_original_and_uses_a_new_device_key() {
         let directory = tempdir().unwrap();

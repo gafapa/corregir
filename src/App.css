@@ -45,6 +45,7 @@ input, select, textarea { border: 1px solid var(--control-border); border-radius
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 input:disabled, select:disabled, textarea:disabled { color: var(--muted); background: var(--surface-muted); cursor: not-allowed; }
 textarea { display: block; min-height: 100px; resize: vertical; }
+.document-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 26rem; overflow: auto; padding: 1rem; background: var(--surface-muted); color: var(--text); font-family: inherit; line-height: 1.6; }
 input[type="number"] { max-width: 140px; font-variant-numeric: tabular-nums; }
 input[type="checkbox"] { width: 18px; min-height: 18px; height: 18px; margin: 0 .5rem 0 0; accent-color: var(--accent); vertical-align: middle; }
 label { display: block; font-size: .875rem; font-weight: 600; margin-block: 1rem; }
@@ -149,3 +150,18 @@ a { color: var(--accent); text-underline-offset: .2em; }
   }
 }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+
+.document-comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+.work-directory { max-width: 42rem; }
+.work-directory form { padding: 1.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-block: 1.5rem; }
+.work-directory form > label:first-child { margin-top: 0; }
+.workspace-location { color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; margin-bottom: 1.5rem; }
+.document-comparison img { display: block; width: 100%; height: auto; }
+.page-viewport { max-height: 42rem; overflow: auto; border: 1px solid var(--border); }
+.document-comparison textarea { min-height: 28rem; line-height: 1.6; }
+.document-comparison label { margin-top: 1.25rem; }
+.submission-filters { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 0 1.5rem; }
+.submission-filters p { grid-column: 1 / -1; }
+.submission-item:focus { outline: 3px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 900px) { .document-comparison { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .submission-filters { grid-template-columns: 1fr; gap: 0; } }

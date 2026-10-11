@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useRef, useState } from "react";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { CriterionWithId, SubmissionSummary, CriterionEvidence, FeedbackAndConsistency, GradingState } from "../lib/types";
 
@@ -28,11 +28,31 @@ export function GradingPanel({
   const [comments, setComments] = useState<Record<string, string>>({});
   const [assessmentSaved, setAssessmentSaved] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const inferenceId = useRef<string | null>(null);
+  const [inferenceStage, setInferenceStage] = useState<string | null>(null);
+  useEffect(() => () => {
+    if (inferenceId.current) void invoke("cmd_cancel_inference", { requestId: inferenceId.current }).catch(() => {});
+  }, []);
+  async function askModel<T>(command: string): Promise<T> {
+    const requestId = crypto.randomUUID();
+    const onProgress = new Channel<{ request_id: string; stage: string }>();
+    inferenceId.current = requestId;
+    setInferenceStage("queued");
+    onProgress.onmessage = message => { if (inferenceId.current === message.request_id) setInferenceStage(message.stage); };
+    try { return await invoke<T>(command, { submissionId: submission.id, requestId, onProgress }); }
+    finally { inferenceId.current = null; setInferenceStage(null); }
+  }
+  async function cancelInference() {
+    if (!inferenceId.current) return;
+    try { await invoke("cmd_cancel_inference", { requestId: inferenceId.current }); }
+    catch (error) { setError(String(error)); }
+  }
 
   useEffect(() => {
     let active = true;
     setLoading("restore");
     setError(null);
+    setAssessmentSaved(false);
     invoke<GradingState>("cmd_load_grading_state", { submissionId: submission.id }).then((state) => {
       if (!active) return;
       setRevision(state.revision);
@@ -81,9 +101,7 @@ export function GradingPanel({
     setLoading("evidence");
     setError(null);
     try {
-      const result = await invoke<CriterionEvidence[]>("cmd_request_evidence", {
-        submissionId: submission.id,
-      });
+      const result = await askModel<CriterionEvidence[]>("cmd_request_evidence");
       setEvidenceList(result);
     } catch (e) {
       setError(String(e));
@@ -124,7 +142,7 @@ export function GradingPanel({
     setLoading("confirm");
     setError(null);
     try {
-      const total = await invoke<number>("cmd_confirm_grade", { submissionId: submission.id });
+      const total = await invoke<number>("cmd_confirm_grade", { submissionId: submission.id, expectedRevision: revision });
       setConfirmedGrade(total);
       onGradeConfirmed?.();
     } catch (e) {
@@ -138,9 +156,7 @@ export function GradingPanel({
     setLoading("feedback");
     setError(null);
     try {
-      const result = await invoke<FeedbackAndConsistency>("cmd_request_feedback", {
-        submissionId: submission.id,
-      });
+      const result = await askModel<FeedbackAndConsistency>("cmd_request_feedback");
       setFeedback(result);
     } catch (e) {
       setError(String(e));
@@ -156,6 +172,7 @@ export function GradingPanel({
         {submission.student_name ? ` — ${submission.student_name}` : ""}
       </h4>
       <p className="assessment-status" role="status" aria-live="polite">{loading ? "Working…" : assessmentSaved ? "Assessment saved." : "Save changes before confirming."}</p>
+      {inferenceStage && <div className="action-row"><p role="status">{inferenceStage === "queued" ? "Waiting for the local model…" : inferenceStage === "saving" ? "Saving the model response…" : "The local model is processing this request…"}</p><button onClick={cancelInference} disabled={inferenceStage === "saving"}>Cancel AI request</button></div>}
 
       <div className="action-row">
       <button className="button-quiet" onClick={() => setRestoreVersion((version) => version + 1)} disabled={loading !== null}>Reload saved assessment</button>

@@ -6,20 +6,28 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   installer:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "24"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
           shared-key: installer
@@ -33,7 +41,17 @@ jobs:
         run: pnpm test
       - name: Test backend
         working-directory: src-tauri
-        run: cargo test --lib --locked
+        run: cargo test --locked
+      - name: Audit JavaScript dependencies
+        run: pnpm audit
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+      - name: Install Rust audit tool
+        run: cargo install cargo-audit --locked
+      - name: Audit Rust dependencies
+        working-directory: src-tauri
+        run: cargo audit
       - name: Build Windows NSIS installer
         run: pnpm tauri build --bundles nsis
       - name: Install and smoke-test packaged resources and startup
@@ -52,6 +70,35 @@ jobs:
           }
           $application = Get-ChildItem -LiteralPath $installDirectory -Filter '*.exe' | Where-Object Name -NotMatch 'uninstall' | Select-Object -First 1
           if (!$application) { throw 'Installed application executable is missing' }
+          $worker = [System.Diagnostics.Process]::new()
+          $worker.StartInfo.FileName = $application.FullName
+          $worker.StartInfo.ArgumentList.Add('--document-worker')
+          $worker.StartInfo.UseShellExecute = $false
+          $worker.StartInfo.CreateNoWindow = $true
+          $worker.StartInfo.RedirectStandardInput = $true
+          $worker.StartInfo.RedirectStandardOutput = $true
+          $workerStarted = $false
+          try {
+            if (!$worker.Start()) { throw 'Packaged document worker did not start' }
+            $workerStarted = $true
+            $request = @{
+              file_path = (Resolve-Path 'synthetic-data/language-student-1.pdf').Path
+              pdfium_directory = Join-Path $installDirectory 'pdfium/bin'
+              models_directory = Join-Path $installDirectory 'models/ocr'
+              force_ocr = $false
+            } | ConvertTo-Json -Compress
+            $worker.StandardInput.WriteLine($request)
+            $worker.StandardInput.Close()
+            $output = $worker.StandardOutput.ReadToEndAsync()
+            if (!$worker.WaitForExit(60000)) { throw 'Packaged document worker timed out' }
+            if ($worker.ExitCode -ne 0) { throw 'Packaged document worker failed' }
+            $messages = $output.GetAwaiter().GetResult().Split("`n", [System.StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $_ | ConvertFrom-Json }
+            $result = $messages | Where-Object kind -eq 'complete' | Select-Object -Last 1
+            if (!$result -or $result.used_ocr -or $result.texts.Count -ne 1 -or $result.texts[0] -notmatch 'nostalgia') { throw 'Packaged document worker returned an unexpected result' }
+          } finally {
+            if ($workerStarted -and !$worker.HasExited) { $worker.Kill($true); $worker.WaitForExit() }
+            $worker.Dispose()
+          }
           $dataDirectory = Join-Path $env:APPDATA 'com.corregir.desktop'
           foreach ($attempt in 1..2) {
             $process = Start-Process -FilePath $application.FullName -PassThru -WindowStyle Hidden
@@ -67,8 +114,27 @@ jobs:
               }
             }
           }
+      - name: Package no-install ZIP
+        shell: pwsh
+        run: ./scripts/package-portable.ps1 -SkipBuild
+      - name: Verify relocated portable ZIP
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem output/portable/*.zip | Select-Object -First 1
+          ./scripts/verify-portable.ps1 -ArchivePath $archive.FullName
+      - name: Verify password-protected work directory
+        run: node scripts/verify-work-directory.cjs
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: corregir-windows-x64-portable-unsigned
+          path: |
+            output/portable/*.zip
+            output/portable/*.sha256
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload unsigned installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: corregir-windows-x64-unsigned
           path: src-tauri/target/release/bundle/nsis/*.exe

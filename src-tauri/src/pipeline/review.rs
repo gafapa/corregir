@@ -13,15 +13,24 @@ pub enum ReviewError {
         "redaction must be confirmed and every rubric criterion must have a valid teacher score"
     )]
     IncompleteAssessment,
+    #[error("the assessment changed; reload and review it before confirming")]
+    StaleAssessment,
 }
 
-pub fn confirm_grade(conn: &Connection, submission_id: i64) -> Result<f64, ReviewError> {
+pub fn confirm_grade(
+    conn: &Connection,
+    submission_id: i64,
+    expected_revision: i64,
+) -> Result<f64, ReviewError> {
     let tx = conn.unchecked_transaction()?;
-    let status: String = tx.query_row(
-        "SELECT status_pipeline FROM submissions WHERE id = ?1",
+    let (status, revision): (String, i64) = tx.query_row(
+        "SELECT status_pipeline, grade_revision FROM submissions WHERE id = ?1",
         [submission_id],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    if revision != expected_revision {
+        return Err(ReviewError::StaleAssessment);
+    }
     let (count, valid): (i64, i64) = tx.query_row(
         "SELECT COUNT(*), COALESCE(SUM(CASE WHEN r.score_final >= 0 AND r.score_final <= cr.score_max THEN 1 ELSE 0 END), 0)
          FROM submissions s JOIN assignments a ON a.id = s.assignment_id
@@ -124,7 +133,7 @@ mod tests {
         let conn = guard.as_ref().unwrap();
         let submission_id = prepare_submission_with_results(conn);
 
-        let total = confirm_grade(conn, submission_id).unwrap();
+        let total = confirm_grade(conn, submission_id, 0).unwrap();
         assert_eq!(total, 7.5);
 
         let status_pipeline: String = conn
@@ -147,6 +156,38 @@ mod tests {
     }
 
     #[test]
+    fn rejects_confirmation_of_an_obsolete_assessment_without_writes() {
+        let directory = tempdir().unwrap();
+        let state = schema::open_with_key(directory.path(), [5u8; 32]).unwrap();
+        let guard = state.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
+        let id = prepare_submission_with_results(conn);
+        conn.execute("UPDATE submissions SET grade_revision=1 WHERE id=?1", [id])
+            .unwrap();
+        assert!(matches!(
+            confirm_grade(conn, id, 0),
+            Err(ReviewError::StaleAssessment)
+        ));
+        let status: String = conn
+            .query_row(
+                "SELECT status_pipeline FROM submissions WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "redacted");
+        let confirmed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM results WHERE submission_id=?1 AND confirmed_by_teacher=1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(confirmed, 0);
+        assert_eq!(confirm_grade(conn, id, 1).unwrap(), 7.5);
+    }
+
+    #[test]
     fn rejects_incomplete_assessment_without_changing_status() {
         let directory = tempdir().unwrap();
         let state = schema::open_with_key(directory.path(), [5u8; 32]).unwrap();
@@ -159,7 +200,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            confirm_grade(conn, id),
+            confirm_grade(conn, id, 0),
             Err(ReviewError::IncompleteAssessment)
         ));
         let status: String = conn

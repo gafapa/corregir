@@ -26,3 +26,15 @@ it("reopens saved work and keeps its actual rubric when preparing another assign
   expect(screen.getByText("Second criterion", { exact: false })).toBeInTheDocument();
   expect(screen.queryByText("First criterion", { exact: false })).not.toBeInTheDocument();
 });
+it("filters saved submissions by text and status without changing their records", async () => {
+  const user = userEvent.setup(); render(<Submissions />);
+  const search = await screen.findByLabelText("Search submissions");
+  await user.type(search,"does not exist");
+  expect(screen.getByText("No submissions match these filters.",{exact:false})).toBeInTheDocument();
+  await user.clear(search); await user.type(search,"Student");
+  expect(screen.getByText("Showing 1 of 1 submissions")).toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("Submission status"),"grade_confirmed");
+  expect(screen.getByText("Showing 0 of 1 submissions")).toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("Submission status"),"redacted");
+  expect(screen.getByText("Showing 1 of 1 submissions")).toBeInTheDocument();
+});

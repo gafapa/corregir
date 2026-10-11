@@ -83,10 +83,20 @@ pub fn validate_file(path: &Path) -> Result<(), RenderError> {
 }
 
 /// Consume one page at a time so rasterized documents cannot accumulate in RAM.
-pub fn visit_pdf<F>(
+#[cfg(test)]
+pub fn visit_pdf<F>(directory_pdfium: &Path, path_pdf: &Path, consume: F) -> Result<(), RenderError>
+where
+    F: FnMut(PageContent, u16, u16) -> Result<(), RenderError>,
+{
+    visit_pdf_with_ocr(directory_pdfium, path_pdf, false, consume)
+}
+
+#[cfg(test)]
+pub fn visit_pdf_with_ocr<F>(
     directory_pdfium: &Path,
     path_pdf: &Path,
-    mut consume: F,
+    force_ocr: bool,
+    consume: F,
 ) -> Result<(), RenderError>
 where
     F: FnMut(PageContent, u16, u16) -> Result<(), RenderError>,
@@ -98,6 +108,36 @@ where
         .map_err(|_| RenderError::Processing("the PDF parser worker failed previously".into()))?;
     let pdfium = load_pdfium(directory_pdfium)?;
     let document = pdfium.load_pdf_from_file(path_pdf, None)?;
+    visit_document(&document, force_ocr, consume)
+}
+
+pub fn visit_pdf_bytes<F>(
+    directory_pdfium: &Path,
+    bytes: &[u8],
+    force_ocr: bool,
+    consume: F,
+) -> Result<(), RenderError>
+where
+    F: FnMut(PageContent, u16, u16) -> Result<(), RenderError>,
+{
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(RenderError::LimitExceeded);
+    }
+    let _guard = PDFIUM_PIPELINE
+        .lock()
+        .map_err(|_| RenderError::Processing("PDF parser lock failed".into()))?;
+    let document = load_pdfium(directory_pdfium)?.load_pdf_from_byte_slice(bytes, None)?;
+    visit_document(&document, force_ocr, consume)
+}
+
+fn visit_document<F>(
+    document: &PdfDocument<'_>,
+    force_ocr: bool,
+    mut consume: F,
+) -> Result<(), RenderError>
+where
+    F: FnMut(PageContent, u16, u16) -> Result<(), RenderError>,
+{
     let total = document.pages().len();
     if total == 0 || total > MAX_PAGES as i32 {
         return Err(RenderError::LimitExceeded);
@@ -116,7 +156,14 @@ where
         if text_bytes > MAX_TEXT_BYTES {
             return Err(RenderError::LimitExceeded);
         }
-        let content = if text.trim().chars().count() >= NATIVE_TEXT_CHARACTER_THRESHOLD {
+        // Form XObjects may wrap images; conservatively OCR them as well.
+        let has_images = page.objects().iter().any(|object| {
+            object.as_image_object().is_some() || object.as_x_object_form_object().is_some()
+        });
+        let content = if !force_ocr
+            && !has_images
+            && text.trim().chars().count() >= NATIVE_TEXT_CHARACTER_THRESHOLD
+        {
             PageContent::NativeText(text)
         } else {
             PageContent::ImageForOcr(page.render_with_config(&config)?.as_image()?.into_rgb8())
@@ -127,9 +174,17 @@ where
 }
 
 /// Load a standalone image or photo for OCR.
+#[cfg(test)]
 pub fn load_image(path_image: &Path) -> Result<RgbImage, RenderError> {
     validate_file(path_image)?;
-    let mut reader = image::ImageReader::open(path_image)?.with_guessed_format()?;
+    load_image_bytes(&std::fs::read(path_image)?)
+}
+
+pub fn load_image_bytes(bytes: &[u8]) -> Result<RgbImage, RenderError> {
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(RenderError::LimitExceeded);
+    }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(6000);
     limits.max_image_height = Some(6000);
@@ -140,6 +195,31 @@ pub fn load_image(path_image: &Path) -> Result<RgbImage, RenderError> {
         return Err(RenderError::LimitExceeded);
     }
     Ok(decoded.into_rgb8())
+}
+
+/// Rasterize one selected page locally; PDF parsing remains in the document worker.
+pub fn preview_bytes(
+    directory_pdfium: &Path,
+    bytes: &[u8],
+    extension: &str,
+    page_number: u16,
+) -> Result<(RgbImage, u16), RenderError> {
+    if page_number == 0 || bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(RenderError::LimitExceeded);
+    }
+    match extension {
+        "pdf" => {
+            let _guard = PDFIUM_PIPELINE.lock().map_err(|_| RenderError::Processing("PDF parser lock failed".into()))?;
+            let document = load_pdfium(directory_pdfium)?.load_pdf_from_byte_slice(bytes,None)?;
+            let total = document.pages().len();
+            if total == 0 || total > MAX_PAGES as i32 || page_number as i32 > total { return Err(RenderError::LimitExceeded); }
+            let page = document.pages().get(page_number as i32 - 1)?;
+            let image = page.render_with_config(&PdfRenderConfig::new().set_target_width(1200).set_maximum_height(1700))?.as_image()?.into_rgb8();
+            Ok((image,total as u16))
+        },
+        "png" | "jpg" | "jpeg" if page_number == 1 => Ok((image::imageops::thumbnail(&load_image_bytes(bytes)?,1200,1700),1)),
+        _ => Err(RenderError::Processing("page preview supports PDF, PNG and JPEG; export Word documents as PDF to compare their layout".into())),
+    }
 }
 
 #[cfg(test)]
@@ -185,6 +265,26 @@ mod tests {
             matches!(result, Err(RenderError::Cancelled)),
             "unexpected parser result: {result:?}"
         );
+    }
+
+    #[test]
+    fn mixed_pages_and_the_manual_override_use_full_page_ocr() {
+        let mixed = process_pdf(
+            &directory_pdfium(),
+            &directory_synthetic_data().join("language-student-2-mixed.pdf"),
+        )
+        .unwrap();
+        assert!(matches!(mixed[0], PageContent::ImageForOcr(_)));
+        visit_pdf_with_ocr(
+            &directory_pdfium(),
+            &directory_synthetic_data().join("language-student-1.pdf"),
+            true,
+            |page, _, _| {
+                assert!(matches!(page, PageContent::ImageForOcr(_)));
+                Ok(())
+            },
+        )
+        .unwrap();
     }
 
     #[test]

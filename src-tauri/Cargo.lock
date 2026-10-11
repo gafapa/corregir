@@ -4552,11 +4552,12 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "aes-gcm 0.10.3",
  "aes-gcm 0.11.1",
  "argon2",
+ "base64 0.22.1",
  "chrono",
  "csv",
  "fs2",
@@ -4583,6 +4584,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "url",
+ "windows-sys 0.61.2",
  "zeroize",
  "zip",
 ]

@@ -19,19 +19,15 @@ pub async fn cmd_create_assignment(
         if text.trim().is_empty() || text.len() > 64 * 1024 {
             return Err("assignment text must contain between 1 and 65536 bytes".into());
         }
-        let id = {
-            let guard = db.conn.lock().map_err(|e| e.to_string())?;
-            let conn = guard.as_ref().ok_or("the database is closed")?;
+        db.write(|conn| {
             conn.execute(
                 "INSERT INTO assignments (rubric_id, text, materials_ref) VALUES (?1, ?2, ?3)",
                 rusqlite::params![rubric_id, text, material_references],
             )
             .map_err(|e| e.to_string())?;
             let id = conn.last_insert_rowid();
-            db.persist(conn).map_err(|e| e.to_string())?;
-            id
-        };
-        Ok(id)
+            Ok(id)
+        })
     })
     .await
 }
@@ -44,17 +40,13 @@ pub async fn cmd_create_rubric(
     let db = db.inner().clone();
     crate::tasks::run(db, move |db| {
         validate_rubric(&rubric)?;
-        let rubric_id = {
-            let mut guard = db.conn.lock().map_err(|e| e.to_string())?;
-            let conn = guard.as_mut().ok_or("the database is closed")?;
+        db.write(|conn| {
             let tx = conn.transaction().map_err(|e| e.to_string())?;
 
             let rubric_id = insert_rubric(&tx, &rubric, 1)?;
             tx.commit().map_err(|e| e.to_string())?;
-            db.persist(conn).map_err(|e| e.to_string())?;
-            rubric_id
-        };
-        Ok(rubric_id)
+            Ok(rubric_id)
+        })
     })
     .await
 }
@@ -106,13 +98,12 @@ pub async fn cmd_create_rubric_version(
 ) -> Result<i64, String> {
     crate::tasks::run(db.inner().clone(), move |db| {
         validate_rubric(&rubric)?;
-        let mut guard = db.conn.lock().map_err(|e| e.to_string())?;
-        let conn = guard.as_mut().ok_or("the database is closed")?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let id = create_rubric_version(&tx, rubric_id, expected_version, &rubric)?;
-        tx.commit().map_err(|e| e.to_string())?;
-        db.persist(conn).map_err(|e| e.to_string())?;
-        Ok(id)
+        db.write(|conn| {
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            let id = create_rubric_version(&tx, rubric_id, expected_version, &rubric)?;
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(id)
+        })
     })
     .await
 }
