@@ -79,11 +79,11 @@ A review of the complete change on 2026-10-16 found the following, fixed before 
 | Grade spreadsheets sorted accented names after "z" | Names sort ignoring accents, with "ñ" after "n". |
 | The comment redactor was rebuilt for every criterion | It is built once per feedback request. |
 
-Rust: 84 library tests and 5 integration tests pass; frontend 42 tests and TypeScript pass. Two findings were kept as documented limits below. A third, marking saved feedback as AI-assisted whenever a current AI draft exists, is intended: it may over-disclose AI assistance but never hides it.
+Rust: 84 library tests and 5 integration tests pass; frontend 42 tests and TypeScript pass. On GitHub, the Verify workflow passed for the pull request (runs 38816546139 and 38818702493). The installed-application qualification passed all phases on a hosted Windows runner (run 38818698331), after its harness received the hosted WebView2 debugging policy described in [WINDOWS-CI.md](WINDOWS-CI.md). Two findings were kept as documented limits below. A third, marking saved feedback as AI-assisted whenever a current AI draft exists, is intended: it may over-disclose AI assistance but never hides it.
 
 ## Remaining limits
 
-- Hosted CI and the hosted packaging workflow have not run; they need the changes to be committed and pushed.
+- The hosted packaging workflow has not run; it builds the release installer and ZIP on request.
 - Native confirmation and file dialogs of the normal build remain outside automation; the qualification build substitutes them.
 - Nicknames and other free-text identifiers in teacher comments are not detected.
 - Access and erasure requests identify a student by name. Two different students with the same name are treated as one; the Privacy section shows how many submissions and roster entries each name has, which the teacher should check first.
