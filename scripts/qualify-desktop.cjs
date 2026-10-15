@@ -27,6 +27,22 @@ function powershell(script) {
 }
 assert.equal(powershell(`(Get-Item -LiteralPath ${psQuote(executable)}).VersionInfo.ProductName`),'Corregir Qualification','refusing to launch a non-qualification application');
 let processId, browser, page, applicationVersion;
+let hostedPolicy = null;
+const policyKey = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments';
+const policyName = path.basename(executable);
+function configureHostedBrowser(argumentsValue) {
+  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') return;
+  // Elevated WebView2 hosts ignore debugging environment overrides starting with runtime 150
+  // (docs/WINDOWS-CI.md). Scope a temporary machine policy to this executable on the
+  // disposable hosted runner only, as verify-work-directory.cjs does.
+  powershell(`$ErrorActionPreference='Stop'; if ((Test-Path -LiteralPath ${psQuote(policyKey)}) -and (Get-ItemProperty -LiteralPath ${psQuote(policyKey)}).PSObject.Properties[${psQuote(policyName)}]) { throw 'An existing WebView2 policy for this executable must not be overwritten.' }; if (!(Test-Path -LiteralPath ${psQuote(policyKey)})) { New-Item -Path ${psQuote(policyKey)} -Force | Out-Null }; New-ItemProperty -LiteralPath ${psQuote(policyKey)} -Name ${psQuote(policyName)} -Value ${psQuote(argumentsValue)} -PropertyType String | Out-Null`);
+  hostedPolicy = argumentsValue;
+}
+function restoreHostedBrowser() {
+  if (hostedPolicy === null) return;
+  powershell(`$ErrorActionPreference='Stop'; if (Test-Path -LiteralPath ${psQuote(policyKey)}) { $property=(Get-ItemProperty -LiteralPath ${psQuote(policyKey)}).PSObject.Properties[${psQuote(policyName)}]; if ($property) { if ($property.Value -ne ${psQuote(hostedPolicy)}) { throw 'The temporary WebView2 policy changed unexpectedly.' }; Remove-ItemProperty -LiteralPath ${psQuote(policyKey)} -Name ${psQuote(policyName)} } }`);
+  hostedPolicy = null;
+}
 let modelRequests = 0;
 const studentName = 'Qualification Student';
 const classmateName = 'Second Synthetic Student';
@@ -80,7 +96,9 @@ async function closeApplication() {
   if (mode === 'create') assert(!fs.existsSync(path.join(workspace,'corregir.sqlite.enc')), 'clean qualification requires a fresh isolated workspace');
   server.listen(0,'127.0.0.1'); await once(server,'listening');
   const modelUrl = `http://127.0.0.1:${server.address().port}`;
-  processId = Number(powershell(`$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1'; $env:CORREGIR_QUALIFICATION_SOURCE_PATH=${psQuote(path.join(root,'synthetic-data','language-student-1.pdf'))}; $env:CORREGIR_QUALIFICATION_OUTPUT_ROOT=${psQuote(outputDirectory)}; $process = Start-Process -FilePath ${psQuote(executable)} -PassThru -WindowStyle Hidden; $process.Id`));
+  const browserArguments = `--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1${process.env.CI ? ' --disable-gpu' : ''}`;
+  configureHostedBrowser(browserArguments);
+  processId = Number(powershell(`$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=${psQuote(browserArguments)}; $env:CORREGIR_QUALIFICATION_SOURCE_PATH=${psQuote(path.join(root,'synthetic-data','language-student-1.pdf'))}; $env:CORREGIR_QUALIFICATION_OUTPUT_ROOT=${psQuote(outputDirectory)}; $process = Start-Process -FilePath ${psQuote(executable)} -PassThru -WindowStyle Hidden; $process.Id`));
   for(let attempt=0;attempt<120;attempt++) {
     try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`,{timeout:1000}); break; } catch { await new Promise(resolve => setTimeout(resolve,500)); }
   }
@@ -252,5 +270,6 @@ async function closeApplication() {
 })().catch(async error=>{ if (page && !page.isClosed()) { await page.screenshot({path:path.join(outputDirectory,`failure-${mode}.png`),fullPage:true}).catch(()=>{}); fs.writeFileSync(path.join(outputDirectory,`failure-${mode}.txt`),await page.locator('body').innerText().catch(()=>'')); } console.error(error);process.exitCode=1;}).finally(async()=>{
   if (processId) { try { await closeApplication(); } catch { powershell(`Stop-Process -Id ${processId} -Force -ErrorAction SilentlyContinue`); } }
   if (browser) await browser.close().catch(()=>{});
+  try { restoreHostedBrowser(); } catch (error) { console.error(error); process.exitCode = 1; }
   server.close();
 });
