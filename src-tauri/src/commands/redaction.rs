@@ -28,6 +28,7 @@ pub async fn cmd_detect_identifiers(
 }
 
 /// Apply only the spans approved by the teacher during human review.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cmd_confirm_redaction(
     db: State<'_, std::sync::Arc<DbState>>,
@@ -35,6 +36,7 @@ pub async fn cmd_confirm_redaction(
     spans: Vec<(usize, usize)>,
     student_name: String,
     student_class_id: Option<String>,
+    student_id: Option<i64>,
     preview_alias: String,
     preview_text: String,
 ) -> Result<String, String> {
@@ -47,6 +49,7 @@ pub async fn cmd_confirm_redaction(
                 &spans,
                 &student_name,
                 student_class_id.as_deref(),
+                student_id,
                 &preview_alias,
                 &preview_text,
             )

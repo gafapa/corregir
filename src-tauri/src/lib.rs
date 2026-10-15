@@ -26,23 +26,34 @@ struct ClosingState(AtomicBool);
 use commands::backup::{
     cmd_backup_status, cmd_export_backup, cmd_restore_backup, cmd_verify_backup,
 };
+use commands::classes::{cmd_delete_class, cmd_list_classes, cmd_save_class};
 use commands::configuration::{
-    cmd_create_assignment, cmd_create_rubric, cmd_create_rubric_version, cmd_list_assignments,
-    cmd_list_rubrics,
+    cmd_create_assignment, cmd_create_rubric, cmd_create_rubric_version, cmd_delete_assignment,
+    cmd_delete_rubric, cmd_list_assignments, cmd_list_rubrics, cmd_update_assignment,
 };
 use commands::diagnostics::cmd_test_ai_connection;
 use commands::document_review::{cmd_preview_document, cmd_save_extracted_text};
 use commands::export::{
-    cmd_export_csv, cmd_export_logs_csv, cmd_export_pdf_feedback, cmd_list_logs_audit,
+    cmd_export_csv, cmd_export_logs_csv, cmd_export_pdf_batch, cmd_export_pdf_feedback,
+    cmd_list_logs_audit,
 };
 use commands::grading::{
-    cmd_load_grading_state, cmd_request_evidence, cmd_request_feedback, cmd_save_grade_tentative,
+    cmd_load_grading_state, cmd_request_evidence, cmd_request_feedback, cmd_save_feedback,
+    cmd_save_grade_tentative,
 };
-use commands::ingestion::{cmd_cancel_import, cmd_import_submission, cmd_list_submissions};
+use commands::ingestion::{
+    cmd_cancel_import, cmd_delete_submission, cmd_import_submission, cmd_list_submissions,
+};
+use commands::privacy::{
+    cmd_erase_student, cmd_export_student_data, cmd_list_known_students,
+    cmd_purge_assignment_identities, cmd_retention_status,
+};
 use commands::recovery::{cmd_recover_workspace, cmd_recovery_status, RecoveryState};
 use commands::redaction::{cmd_confirm_redaction, cmd_detect_identifiers, cmd_preview_redaction};
-use commands::review::cmd_confirm_grade;
-use commands::settings::{cmd_load_ollama_settings, cmd_save_ollama_settings};
+use commands::review::{cmd_confirm_grade, cmd_reopen_grade};
+use commands::settings::{
+    cmd_load_ollama_settings, cmd_load_preferences, cmd_save_ollama_settings, cmd_save_preferences,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -50,6 +61,7 @@ pub fn run() {
     #[cfg(feature = "qualification")]
     let builder = builder
         .manage(qualification::QualificationPicker::default())
+        .manage(qualification::QualificationAnswer::default())
         .plugin(qualification::plugin());
     #[cfg(not(feature = "qualification"))]
     let builder = builder.plugin(tauri_plugin_dialog::init());
@@ -117,6 +129,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             #[cfg(feature = "qualification")]
             qualification::cmd_set_qualification_picker,
+            #[cfg(feature = "qualification")]
+            qualification::cmd_set_qualification_answer,
             cmd_test_ai_connection,
             cmd_create_rubric,
             cmd_create_rubric_version,
@@ -152,6 +166,23 @@ pub fn run() {
             cmd_export_logs_csv,
             cmd_export_pdf_feedback,
             cmd_list_logs_audit,
+            cmd_update_assignment,
+            cmd_delete_assignment,
+            cmd_delete_rubric,
+            cmd_list_classes,
+            cmd_save_class,
+            cmd_delete_class,
+            cmd_delete_submission,
+            cmd_save_feedback,
+            cmd_reopen_grade,
+            cmd_export_pdf_batch,
+            cmd_load_preferences,
+            cmd_save_preferences,
+            cmd_purge_assignment_identities,
+            cmd_list_known_students,
+            cmd_export_student_data,
+            cmd_erase_student,
+            cmd_retention_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

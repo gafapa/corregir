@@ -4,7 +4,8 @@ use tauri::State;
 use crate::db::DbState;
 use crate::pipeline::inference_client::InferenceClient;
 use crate::pipeline::prompt_builder::{
-    self, CriterionEvidence, FeedbackAndConsistency, PromptCriterion,
+    self, EvidenceResult, FeedbackAndConsistency, PromptContext, PromptCriterion,
+    TeacherCriterionAssessment,
 };
 use crate::pipeline::redaction;
 
@@ -12,23 +13,28 @@ fn assignment_and_criteria(
     conn: &rusqlite::Connection,
     submission_id: i64,
 ) -> Result<(String, Vec<PromptCriterion>), String> {
-    let (assignment_id,): (i64,) = conn
+    let (text, criteria, _) = prompt_inputs(conn, submission_id)?;
+    Ok((text, criteria))
+}
+
+/// Assignment text, rubric criteria with their levels, and rubric context.
+fn prompt_inputs(
+    conn: &rusqlite::Connection,
+    submission_id: i64,
+) -> Result<(String, Vec<PromptCriterion>, PromptContext), String> {
+    let (rubric_id, text_assignment, subject, grade_level): (i64, String, String, String) = conn
         .query_row(
-            "SELECT assignment_id FROM submissions WHERE id = ?1",
+            "SELECT a.rubric_id, a.text, r.subject, r.grade_level FROM submissions s
+             JOIN assignments a ON a.id = s.assignment_id
+             JOIN rubrics r ON r.id = a.rubric_id
+             WHERE s.id = ?1",
             [submission_id],
-            |r| Ok((r.get(0)?,)),
-        )
-        .map_err(|e| e.to_string())?;
-    let (rubric_id, text_assignment): (i64, String) = conn
-        .query_row(
-            "SELECT rubric_id, text FROM assignments WHERE id = ?1",
-            [assignment_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT code, description, score_max FROM criteria_rubric
+            "SELECT code, description, score_max, levels_json FROM criteria_rubric
              WHERE rubric_id = ?1 ORDER BY sort_order",
         )
         .map_err(|e| e.to_string())?;
@@ -38,12 +44,20 @@ fn assignment_and_criteria(
                 id: r.get(0)?,
                 description: r.get(1)?,
                 score_max: r.get(2)?,
+                levels: super::configuration::parse_levels(r.get(3)?),
             })
         })
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    Ok((text_assignment, criteria))
+    Ok((
+        text_assignment,
+        criteria,
+        PromptContext {
+            subject,
+            grade_level,
+        },
+    ))
 }
 
 fn id_of_criterion(
@@ -99,17 +113,18 @@ pub async fn cmd_request_evidence(
     jobs: State<'_, std::sync::Arc<crate::inference_jobs::InferenceJobs>>,
     request_id: String,
     on_progress: tauri::ipc::Channel<crate::inference_jobs::InferenceProgress>,
-) -> Result<Vec<CriterionEvidence>, String> {
+) -> Result<EvidenceResult, String> {
     let mut job = jobs.inner().begin(request_id, Some(on_progress)).await?;
-    let (text_assignment, criteria, confirmed, settings) = {
+    let (text_assignment, criteria, context, confirmed, settings) = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
         let conn = guard.as_ref().ok_or("the database is closed")?;
-        let (text_assignment, criteria) = assignment_and_criteria(conn, submission_id)?;
+        let (text_assignment, criteria, context) = prompt_inputs(conn, submission_id)?;
         let confirmed =
             redaction::load_confirmed(conn, submission_id).map_err(|e| e.to_string())?;
         (
             text_assignment,
             criteria,
+            context,
             confirmed,
             super::settings::load(conn)?,
         )
@@ -122,6 +137,7 @@ pub async fn cmd_request_evidence(
                 &client,
                 &settings.model,
                 &text_assignment,
+                &context,
                 &criteria,
                 &confirmed,
             )
@@ -139,7 +155,7 @@ pub async fn cmd_request_evidence(
         let tx = connection.transaction().map_err(|e| e.to_string())?;
         let conn = &tx;
         redaction::load_confirmed(conn, submission_id).map_err(|e| e.to_string())?;
-        for ev in &stored {
+        for ev in &stored.evidence {
             let criterion_id = id_of_criterion(conn, submission_id, &ev.criterion_id)?;
             conn.execute(
                 "INSERT INTO results (submission_id, criterion_id, ai_evidence_json) VALUES (?1, ?2, ?3)
@@ -158,7 +174,7 @@ pub async fn cmd_request_evidence(
             rusqlite::params![
                 submission_id,
                 settings.model,
-                serde_json::json!({"criteria_count":stored.len()}).to_string()
+                serde_json::json!({"criteria_count":stored.evidence.len(),"discarded_quotes":stored.discarded_quotes}).to_string()
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -241,6 +257,9 @@ pub struct GradingState {
     revision: i64,
     criteria: Vec<SavedCriterion>,
     feedback: Option<FeedbackAndConsistency>,
+    /// Feedback text saved by the teacher; this is what reports contain.
+    feedback_final: Option<String>,
+    feedback_ai_assisted: bool,
 }
 
 #[tauri::command]
@@ -250,13 +269,13 @@ pub async fn cmd_load_grading_state(
 ) -> Result<GradingState, String> {
     crate::tasks::run(db.inner().clone(),move|db| {
         let guard=db.conn.lock().map_err(|e|e.to_string())?;let conn=guard.as_ref().ok_or("the database is closed")?;
-        let (revision,feedback):(i64,Option<String>)=conn.query_row("SELECT grade_revision,CASE WHEN feedback_revision=grade_revision THEN feedback_json END FROM submissions WHERE id=?1",[submission_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
+        let (revision,feedback,feedback_final,feedback_ai_assisted):(i64,Option<String>,Option<String>,bool)=conn.query_row("SELECT grade_revision,CASE WHEN feedback_revision=grade_revision THEN feedback_json END,feedback_final,feedback_ai_assisted FROM submissions WHERE id=?1",[submission_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|e.to_string())?;
         let mut stmt=conn.prepare("SELECT cr.code,r.score_final,r.comment_teacher,r.ai_evidence_json FROM submissions s JOIN assignments a ON a.id=s.assignment_id JOIN criteria_rubric cr ON cr.rubric_id=a.rubric_id LEFT JOIN results r ON r.submission_id=s.id AND r.criterion_id=cr.id WHERE s.id=?1 ORDER BY cr.sort_order").map_err(|e|e.to_string())?;
         let criteria=stmt.query_map([submission_id],|r| {
             let evidence:Option<String>=r.get(3)?;
             Ok(SavedCriterion {criterion_id:r.get(0)?,score:r.get(1)?,comment_teacher:r.get(2)?,evidence_textual:evidence.and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default()})
         }).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
-        Ok(GradingState {revision,criteria,feedback:feedback.map(|s|serde_json::from_str(&s)).transpose().map_err(|e|e.to_string())?})
+        Ok(GradingState {revision,criteria,feedback:feedback.map(|s|serde_json::from_str(&s)).transpose().map_err(|e|e.to_string())?,feedback_final,feedback_ai_assisted})
     }).await
 }
 
@@ -271,30 +290,53 @@ pub async fn cmd_request_feedback(
     on_progress: tauri::ipc::Channel<crate::inference_jobs::InferenceProgress>,
 ) -> Result<FeedbackAndConsistency, String> {
     let mut job = jobs.inner().begin(request_id, Some(on_progress)).await?;
-    let (text_assignment, criteria, confirmed, assessment_teacher, revision, settings) = {
+    let (
+        text_assignment,
+        criteria,
+        context,
+        confirmed,
+        assessment_teacher,
+        revision,
+        settings,
+        preferences,
+        redactor,
+    ) = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
         let conn = guard.as_ref().ok_or("the database is closed")?;
-        let (text_assignment, criteria) = assignment_and_criteria(conn, submission_id)?;
+        let (text_assignment, criteria, context) = prompt_inputs(conn, submission_id)?;
         let confirmed =
             redaction::load_confirmed(conn, submission_id).map_err(|e| e.to_string())?;
 
         let mut stmt = conn
             .prepare(
-                "SELECT cr.code, r.score_final FROM results r
+                "SELECT cr.code, r.score_final, r.comment_teacher FROM results r
                  JOIN criteria_rubric cr ON cr.id = r.criterion_id
-                 WHERE r.submission_id = ?1",
+                 WHERE r.submission_id = ?1 ORDER BY cr.sort_order",
             )
             .map_err(|e| e.to_string())?;
-        let assessment_teacher: Vec<(String, Option<f64>)> = stmt
-            .query_map([submission_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        let saved: Vec<(String, Option<f64>, Option<String>)> = stmt
+            .query_map([submission_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
 
-        if assessment_teacher.len() != criteria.len()
-            || assessment_teacher.iter().any(|(_, score)| score.is_none())
-        {
+        if saved.len() != criteria.len() || saved.iter().any(|(_, score, _)| score.is_none()) {
             return Err("save a score for every criterion before requesting feedback".into());
+        }
+        // Teacher comments can contain names typed by hand; they are sent only after
+        // the same redaction of the confirmed student name.
+        let redactor =
+            redaction::known_name_redactor(conn, submission_id).map_err(|e| e.to_string())?;
+        let mut assessment_teacher = Vec::with_capacity(saved.len());
+        for (criterion_id, score, comment) in saved {
+            let comment = comment
+                .filter(|comment| !comment.trim().is_empty())
+                .map(|comment| redactor.apply(&comment));
+            assessment_teacher.push(TeacherCriterionAssessment {
+                criterion_id,
+                score: score.unwrap_or_default(),
+                comment,
+            });
         }
 
         let revision: i64 = conn
@@ -307,10 +349,13 @@ pub async fn cmd_request_feedback(
         (
             text_assignment,
             criteria,
+            context,
             confirmed,
             assessment_teacher,
             revision,
             super::settings::load(conn)?,
+            super::settings::load_preferences(conn)?,
+            redactor,
         )
     };
 
@@ -321,6 +366,8 @@ pub async fn cmd_request_feedback(
                 &client,
                 &settings.model,
                 &text_assignment,
+                &context,
+                preferences.feedback_language,
                 &criteria,
                 &confirmed,
                 &assessment_teacher,
@@ -333,6 +380,13 @@ pub async fn cmd_request_feedback(
     job.check()?;
     job.report("saving");
 
+    // The model only knows the alias; a draft that addresses the student by it would
+    // otherwise reach the student's report.
+    let mut feedback = feedback;
+    feedback.comment_feedback = redactor.reveal(&feedback.comment_feedback);
+    for item in &mut feedback.inconsistencies {
+        item.observation = redactor.reveal(&item.observation);
+    }
     let stored = feedback.clone();
     crate::tasks::run(db.inner().clone(),move|db| {
         db.write(|conn| {
@@ -347,16 +401,103 @@ pub async fn cmd_request_feedback(
     Ok(feedback)
 }
 
+/// Save the feedback text the teacher approves for the student, whether written by
+/// hand or edited from an AI draft. Reports use only this text.
+#[tauri::command]
+pub async fn cmd_save_feedback(
+    db: State<'_, std::sync::Arc<DbState>>,
+    submission_id: i64,
+    text: String,
+    ai_assisted: bool,
+) -> Result<(), String> {
+    crate::tasks::run(db.inner().clone(), move |db| {
+        db.write(|conn| save_feedback(conn, submission_id, &text, ai_assisted))
+    })
+    .await
+}
+
+fn save_feedback(
+    conn: &mut rusqlite::Connection,
+    submission_id: i64,
+    text: &str,
+    ai_assisted: bool,
+) -> Result<(), String> {
+    if text.len() > 20_000 {
+        return Err("feedback is limited to 20000 bytes".into());
+    }
+    let text = text.trim();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let (status, current_draft): (String, bool) = tx
+        .query_row(
+            "SELECT status_pipeline, feedback_json IS NOT NULL AND feedback_revision=grade_revision FROM submissions WHERE id=?1",
+            [submission_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    if status != "redacted" {
+        return Err("feedback can be edited only while the grade is not confirmed".into());
+    }
+    let assisted = !text.is_empty() && (ai_assisted || current_draft);
+    tx.execute(
+        "UPDATE submissions SET feedback_final=?1, feedback_ai_assisted=?2 WHERE id=?3",
+        rusqlite::params![(!text.is_empty()).then_some(text), assisted, submission_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO logs_audit (submission_id,event,actor,payload_json) VALUES (?1,'feedback_saved','teacher',?2)",
+        rusqlite::params![submission_id, serde_json::json!({"ai_assisted": assisted, "bytes": text.len()}).to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn saved_feedback_records_ai_assistance_and_locks_after_confirmation() {
+        let mut conn = assessment_database();
+        save_assessments(&mut conn, 1, 0, &assessments(5.0)).unwrap();
+        save_feedback(&mut conn, 1, "  Written by hand. ", false).unwrap();
+        let row: (String, bool) = conn
+            .query_row(
+                "SELECT feedback_final, feedback_ai_assisted FROM submissions WHERE id=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("Written by hand.".into(), false));
+        persist_feedback(
+            &conn,
+            1,
+            1,
+            &FeedbackAndConsistency {
+                comment_feedback: "Draft".into(),
+                inconsistencies: vec![],
+            },
+        )
+        .unwrap();
+        save_feedback(&mut conn, 1, "Edited draft", false).unwrap();
+        let assisted: bool = conn
+            .query_row(
+                "SELECT feedback_ai_assisted FROM submissions WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(assisted);
+        conn.execute(
+            "UPDATE submissions SET status_pipeline='grade_confirmed' WHERE id=1",
+            [],
+        )
+        .unwrap();
+        assert!(save_feedback(&mut conn, 1, "Late change", false).is_err());
+    }
+
     fn assessment_database() -> rusqlite::Connection {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("../db/migrations/0001_init.sql"))
-            .unwrap();
-        conn.execute_batch(include_str!("../db/migrations/0003_workflow.sql"))
-            .unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&mut conn).unwrap();
         conn.execute_batch("INSERT INTO rubrics (id,title,subject,grade_level,content_json) VALUES (1,'t','s','g','{}'); INSERT INTO criteria_rubric (id,rubric_id,code,description,score_max,sort_order) VALUES (1,1,'C1','One',10,0),(2,1,'C2','Two',10,1); INSERT INTO assignments (id,rubric_id,text) VALUES (1,1,'assignment'); INSERT INTO submissions (id,assignment_id,status_pipeline) VALUES (1,1,'redacted');").unwrap();
         conn
     }

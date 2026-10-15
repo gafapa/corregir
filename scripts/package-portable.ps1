@@ -7,7 +7,7 @@ if (!$SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw 'Portable release build failed.' }
 }
 $config = Get-Content 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
-$executable = Get-Item -LiteralPath 'src-tauri/target/release/tauri-app.exe'
+$executable = Get-Item -LiteralPath 'src-tauri/target/release/corregir.exe'
 if ($executable.VersionInfo.ProductName -ne $config.productName -or $executable.VersionInfo.ProductVersion -ne $config.version) { throw 'The release executable does not match the normal application/version.' }
 $outputDirectory = Join-Path $projectRoot 'output\portable'
 $packageName = "Corregir_$($config.version)_windows_x64_portable"

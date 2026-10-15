@@ -36,7 +36,12 @@ static RE_NIE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b([XYZxyz])[-\s]?(\d{7})[-\s]?([A-Za-z])\b").unwrap());
 static RE_EMAIL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap());
-static RE_PHONE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[679]\d{8}\b").unwrap());
+// Spanish mobile and landline numbers, optionally with +34 and grouped as
+// 666123456, 666 123 456, 666 12 34 56 or 981-12-34-56.
+static RE_PHONE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:\+34[\s.-]?)?\b[6789]\d{2}(?:(?:[\s.-]?\d{3}){2}|(?:[\s.-]?\d{2}){3})\b")
+        .unwrap()
+});
 static RE_IBAN: LazyLock<Regex> = LazyLock::new(|| {
     // Structural check (ES + 22 digits, with optional separators);
     // The mod-97 control digit is not validated; this is sufficient to flag the
@@ -117,46 +122,71 @@ pub fn detect_by_rule(text: &str) -> Vec<IdentifierCandidate> {
 /// Find each full roster name and its parts in `text`, including cases where
 /// a student uses only their given name. Matching is case insensitive and
 /// literal, so OCR errors are not tolerated.
-pub fn detect_by_roster(text: &str, roster: &[String]) -> Vec<IdentifierCandidate> {
-    let lowercase_text = text.to_lowercase();
-    let mut candidates = Vec::new();
-    let mut terms: Vec<String> = Vec::new();
+/// Name particles that are also ordinary words; they are not matched on their own.
+pub(crate) const NAME_PARTICLES: &[&str] = &[
+    "de", "da", "do", "das", "dos", "del", "la", "las", "los", "y", "e", "i", "van", "von",
+];
 
+/// Roster names in the text. Full names match in any case and across line breaks.
+/// A single name part matches only as a whole capitalized word: with a whole class
+/// roster, parts such as "Mar", "Vila" or "Ana" would otherwise flag ordinary words
+/// ("o mar", "a vila", "análise").
+pub fn detect_by_roster(text: &str, roster: &[String]) -> Vec<IdentifierCandidate> {
+    let mut candidates = Vec::new();
+    // (term, is a full name); a term that is both keeps the full-name rule.
+    let mut terms: std::collections::BTreeMap<String, (String, bool)> = Default::default();
     for full_name in roster {
-        let cleaned = full_name.trim();
+        let cleaned = full_name.split_whitespace().collect::<Vec<_>>().join(" ");
         if cleaned.is_empty() {
             continue;
         }
-        terms.push(cleaned.to_string());
-        for part in cleaned.split_whitespace() {
-            if part.chars().count() >= 3 {
-                terms.push(part.to_string());
+        for part in cleaned.split(' ') {
+            if part.chars().count() >= 3 && !NAME_PARTICLES.contains(&part.to_lowercase().as_str())
+            {
+                terms
+                    .entry(part.to_lowercase())
+                    .or_insert((part.to_string(), false));
             }
         }
+        terms.insert(cleaned.to_lowercase(), (cleaned, true));
     }
-
+    let mut terms: Vec<(String, bool)> = terms.into_values().collect();
     // Longer terms first, so a full name is detected
     // as a single candidate instead of being split into its parts.
-    terms.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    terms.sort_by_key(|(term, _)| std::cmp::Reverse(term.len()));
 
-    for term in &terms {
-        let lowercase_term = term.to_lowercase();
-        let mut from_position = 0;
-        while let Some(relative_position) = lowercase_text[from_position..].find(&lowercase_term) {
-            let start = from_position + relative_position;
-            let end = start + lowercase_term.len();
+    // Match on the original text: lowercasing can change UTF-8 lengths (for example
+    // the ohm sign), so offsets found in a lowercased copy are not valid here.
+    for (term, full_name) in &terms {
+        let words: Vec<String> = term.split(' ').map(regex::escape).collect();
+        let Ok(pattern) = regex::RegexBuilder::new(&format!(r"\b{}\b", words.join(r"\s+")))
+            .case_insensitive(true)
+            .build()
+        else {
+            continue;
+        };
+        for found in pattern.find_iter(text) {
+            if !full_name
+                && !found
+                    .as_str()
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_uppercase)
+            {
+                continue;
+            }
+            let (start, end) = (found.start(), found.end());
             let overlaps = candidates
                 .iter()
                 .any(|c: &IdentifierCandidate| start < c.end && end > c.start);
             if !overlaps {
                 candidates.push(IdentifierCandidate {
                     kind: "name_roster".into(),
-                    text: text[start..end].to_string(),
+                    text: found.as_str().to_string(),
                     start,
                     end,
                 });
             }
-            from_position = end;
         }
     }
 
@@ -194,12 +224,56 @@ mod tests {
     }
 
     #[test]
+    fn detects_grouped_and_prefixed_phone_numbers() {
+        for text in [
+            "Ring 666 123 456 today",
+            "Ring 666 12 34 56 today",
+            "Ring +34 666123456 today",
+            "Ring 981-12-34-56 today",
+        ] {
+            let phones: Vec<_> = detect_by_rule(text)
+                .into_iter()
+                .filter(|c| c.kind == "phone")
+                .collect();
+            assert_eq!(phones.len(), 1, "{text}");
+            assert!(phones[0].text.ends_with(['6', '5']), "{text}");
+        }
+        assert!(detect_by_rule("Answer: 12 m/s and 4096 bytes")
+            .iter()
+            .all(|c| c.kind != "phone"));
+    }
+
+    #[test]
+    fn roster_offsets_stay_valid_when_lowercasing_changes_lengths() {
+        // U+212A KELVIN SIGN lowercases to a one-byte "k".
+        let roster = vec!["Ana Pérez".to_string()];
+        let text = "T = 300 \u{212A}. ANA PÉREZ signs.";
+        let candidates = detect_by_roster(text, &roster);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].text, "ANA PÉREZ");
+        assert_eq!(&text[candidates[0].start..candidates[0].end], "ANA PÉREZ");
+    }
+
+    #[test]
     fn detects_full_roster_name_without_fragmenting() {
         let roster = vec!["Maria Synthetic Lopez Example".to_string()];
         let text = "Name: Maria Synthetic Lopez Example\nResponse: ...";
         let candidates = detect_by_roster(text, &roster);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].text, "Maria Synthetic Lopez Example");
+    }
+
+    #[test]
+    fn roster_parts_need_a_capitalized_whole_word() {
+        let roster = vec![
+            "Mar Vila del Río".to_string(),
+            "Ana Souto".to_string(),
+            "Uxía Pereira".to_string(),
+        ];
+        let text = "Na análise do mar e da vila, Mar cita a ANA SOUTO.\nUxía\nPereira del norte.";
+        let candidates = detect_by_roster(text, &roster);
+        let found: Vec<&str> = candidates.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(found, ["Uxía\nPereira", "ANA SOUTO", "Mar"]);
     }
 
     #[test]
@@ -231,7 +305,7 @@ mod tests {
     #[test]
     fn detect_all_can_return_overlapping_candidates() {
         let text = "Name: Maria Synthetic Lopez Example\nNational ID: 12345678Z (fictional)\n\
-                     Email: maria.synthetic.example@invalid.test\n\nResponse...";
+                     Email: Maria.Synthetic.Example@invalid.test\n\nResponse...";
         let roster = vec!["Maria Synthetic Lopez Example".to_string()];
         let candidates = detect_all(text, &roster);
         let has_overlap = candidates.iter().enumerate().any(|(i, a)| {

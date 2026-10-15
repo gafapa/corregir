@@ -5,13 +5,14 @@ import { RedactionPanel } from "./RedactionPanel";
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 const submission = { id: 3, assignment_id: 1, text_ocr: "José 😀 explains the answer.", method_ocr: "text_native", status_pipeline: "ocr_complete", student_name: null };
-beforeEach(() => { invokeMock.mockReset(); invokeMock.mockImplementation(async command => command === "cmd_preview_redaction" ? { alias: "1234abcd", text: "1234abcd 😀 explains the answer." } : "1234abcd"); });
+beforeEach(() => { invokeMock.mockReset(); invokeMock.mockImplementation(async command => command === "cmd_preview_redaction" ? { alias: "1234abcd", text: "1234abcd 😀 explains the answer." } : command === "cmd_detect_identifiers" ? [] : "1234abcd"); });
 it("requires reviewing the exact preview and invalidates it when inputs change", async () => {
   const user = userEvent.setup();
   const confirmed = vi.fn();
   render(<RedactionPanel submission={submission} onConfirmed={confirmed} />);
   const confirm = screen.getByRole("button", { name: "Confirm redaction" });
   expect(confirm).toBeDisabled();
+  await screen.findByText(/No identifiers were detected automatically/);
   const name = screen.getByLabelText(/Student's real name/);
   await user.type(name, "José");
   await user.click(screen.getByRole("button", { name: "Preview redacted text" }));
@@ -27,4 +28,16 @@ it("requires reviewing the exact preview and invalidates it when inputs change",
   await user.click(confirm);
   await waitFor(() => expect(confirmed).toHaveBeenCalledOnce());
   expect(invokeMock).toHaveBeenCalledWith("cmd_confirm_redaction", expect.objectContaining({ submissionId: 3, previewAlias: "1234abcd", previewText: "1234abcd 😀 explains the answer." }));
+});
+it("links the student chosen from the class roster", async () => {
+  const user = userEvent.setup();
+  render(<RedactionPanel submission={submission} onConfirmed={vi.fn()} roster={[{ id: 5, full_name: "José Pérez" }, { id: 6, full_name: "Uxía Rey" }]} linkedStudentIds={[6]} />);
+  expect(screen.queryByLabelText(/Student's real name/)).not.toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "Uxía Rey — already has a submission" })).toBeInTheDocument();
+  await screen.findByText(/No identifiers were detected automatically/);
+  await user.selectOptions(screen.getByLabelText("Student"), "5");
+  await user.click(screen.getByRole("button", { name: "Preview redacted text" }));
+  await user.click(await screen.findByLabelText("I checked this text for remaining identifiers."));
+  await user.click(screen.getByRole("button", { name: "Confirm redaction" }));
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_confirm_redaction", expect.objectContaining({ studentName: "José Pérez", studentId: 5 })));
 });

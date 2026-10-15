@@ -1,4 +1,7 @@
-use crate::{db::DbState, pipeline::inference_client::InferenceClient};
+use crate::{
+    db::DbState,
+    pipeline::{inference_client::InferenceClient, prompt_builder::FeedbackLanguage},
+};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -50,6 +53,67 @@ pub fn load(conn: &Connection) -> Result<OllamaSettings, String> {
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
     Ok(settings)
+}
+/// Teacher preferences stored in the encrypted workspace.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Preferences {
+    #[serde(default)]
+    pub feedback_language: FeedbackLanguage,
+    /// Days after the last grade confirmation before identities should be purged.
+    /// Agree the period with the data protection officer; `None` disables reminders.
+    #[serde(default)]
+    pub retention_days: Option<u32>,
+}
+impl Preferences {
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .retention_days
+            .is_some_and(|days| !(1..=3650).contains(&days))
+        {
+            return Err("the retention period must be between 1 and 3650 days".into());
+        }
+        Ok(())
+    }
+}
+pub fn load_preferences(conn: &Connection) -> Result<Preferences, String> {
+    let saved: Option<String> = conn
+        .query_row(
+            "SELECT value FROM configuration WHERE key='preferences'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    Ok(saved
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default())
+}
+#[tauri::command]
+pub async fn cmd_load_preferences(
+    db: State<'_, std::sync::Arc<DbState>>,
+) -> Result<Preferences, String> {
+    crate::tasks::run(db.inner().clone(), |db| {
+        let guard = db.conn.lock().map_err(|error| error.to_string())?;
+        load_preferences(guard.as_ref().ok_or("the database is closed")?)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn cmd_save_preferences(
+    db: State<'_, std::sync::Arc<DbState>>,
+    preferences: Preferences,
+) -> Result<(), String> {
+    crate::tasks::run(db.inner().clone(), move |db| {
+        preferences.validate()?;
+        db.write(|conn| {
+            conn.execute("INSERT INTO configuration (key,value) VALUES ('preferences',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [serde_json::to_string(&preferences).map_err(|error| error.to_string())?]).map_err(|error| error.to_string())?;
+            Ok(())
+        })
+    })
+    .await
 }
 #[tauri::command]
 pub async fn cmd_load_ollama_settings(
@@ -115,5 +179,23 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+    #[test]
+    fn preferences_default_to_automatic_language_and_validate_retention() {
+        let parsed: Preferences =
+            serde_json::from_str(r#"{"feedback_language":"gl","retention_days":365}"#).unwrap();
+        assert_eq!(parsed.feedback_language, FeedbackLanguage::Gl);
+        parsed.validate().unwrap();
+        assert_eq!(
+            Preferences::default().feedback_language,
+            FeedbackLanguage::Auto
+        );
+        assert!(Preferences {
+            retention_days: Some(0),
+            ..Preferences::default()
+        }
+        .validate()
+        .is_err());
+        assert!(serde_json::from_str::<Preferences>(r#"{"feedback_language":"fr"}"#).is_err());
     }
 }

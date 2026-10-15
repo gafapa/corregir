@@ -3,7 +3,7 @@
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--document-worker") {
-        std::process::exit(tauri_app_lib::run_document_worker());
+        std::process::exit(corregir_lib::run_document_worker());
     }
-    tauri_app_lib::run()
+    corregir_lib::run()
 }

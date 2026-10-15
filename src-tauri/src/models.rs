@@ -1,10 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+/// Optional rubric descriptor: selecting a level fills in its score.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceLevel {
+    pub label: String,
+    pub score: f64,
+    #[serde(default)]
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewCriterion {
     pub code: String,
     pub description: String,
     pub score_max: f64,
+    #[serde(default)]
+    pub levels: Vec<PerformanceLevel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +34,7 @@ pub struct CriterionWithId {
     pub description: String,
     pub score_max: f64,
     pub sort_order: i64,
+    pub levels: Vec<PerformanceLevel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +58,11 @@ pub struct SubmissionSummary {
     /// The teacher needs to identify submissions during review; this field
     /// does not create another persistent copy of the name.
     pub student_name: Option<String>,
+    pub student_id: Option<i64>,
+    /// File name selected at import, kept to tell submissions apart.
+    pub source_name: Option<String>,
+    pub identities_purged: bool,
+    pub has_evidence: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

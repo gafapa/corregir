@@ -100,6 +100,13 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Connection, String> {
         return Err("backup contains unsupported database objects".into());
     }
     for query in ["SELECT id,title,subject,grade_level,version,content_json FROM rubrics", "SELECT id,rubric_id,code,description,score_max,sort_order FROM criteria_rubric", "SELECT id,rubric_id,text,materials_ref FROM assignments", "SELECT id,assignment_id,text_ocr,text_redacted,status_pipeline,grade_revision,feedback_json,feedback_revision FROM submissions", "SELECT alias,student_name,submission_id FROM alias_student_map", "SELECT id,submission_id,criterion_id,score_final,ai_evidence_json,comment_teacher FROM results", "SELECT id,submission_id,event,actor,model_version,created_at FROM logs_audit", "SELECT key,value FROM configuration"] { conn.prepare(query).map_err(|_| "backup schema is not compatible with this application")?; }
+    // Backups from earlier versions are restored with the current schema.
+    super::schema::migrate(&mut conn).map_err(|error| match error {
+        super::schema::DbError::NewerSchema => {
+            "this backup was created by a newer version of Corregir; update the application before restoring it"
+        }
+        _ => "could not upgrade the backup schema",
+    })?;
     let foreign_key_error = conn
         .prepare("PRAGMA foreign_key_check")
         .map_err(|error| error.to_string())?
@@ -123,6 +130,8 @@ pub fn restore(db: &DbState, restored: Connection) -> Result<(), String> {
         "results",
         "alias_student_map",
         "logs_audit",
+        "classes",
+        "students",
     ] {
         let count: i64 = current
             .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {

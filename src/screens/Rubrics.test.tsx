@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { Rubrics } from "./Rubrics";
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
 beforeEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (command: string) => command === "cmd_list_rubrics" ? [{ id: 2, title: "Stored rubric", subject: "Science", grade_level: "Year 9", version: 1, criteria: [{ id: 4, code: "C1", description: "Stored criterion", score_max: 10, sort_order: 0 }] }] : 3);
@@ -14,7 +15,7 @@ it("creates a custom rubric with its teacher-defined criteria", async () => {
   await user.type(screen.getByLabelText("Title"), "My assessment"); await user.type(screen.getByLabelText("Subject"), "History"); await user.type(screen.getByLabelText("Year group"), "Year 8");
   await user.type(screen.getByLabelText("Description 1"), "Explains the historical context.");
   await user.click(screen.getByRole("button", { name: "Save rubric" }));
-  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_create_rubric", { rubric: { title: "My assessment", subject: "History", grade_level: "Year 8", criteria: [{ code: "C1", description: "Explains the historical context.", score_max: 10 }] } }));
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_create_rubric", { rubric: { title: "My assessment", subject: "History", grade_level: "Year 8", criteria: [{ code: "C1", description: "Explains the historical context.", score_max: 10, levels: [] }] } }));
 });
 it("saves edits as a new version and never overwrites the source rubric", async () => {
   const user = userEvent.setup(); render(<Rubrics />);
@@ -22,7 +23,7 @@ it("saves edits as a new version and never overwrites the source rubric", async 
   expect(screen.getByLabelText("Title")).toHaveFocus();
   await user.clear(screen.getByLabelText("Maximum score 1")); await user.type(screen.getByLabelText("Maximum score 1"), "5");
   await user.click(screen.getByRole("button", { name: "Save as new version" }));
-  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_create_rubric_version", { rubricId: 2, expectedVersion: 1, rubric: { title: "Stored rubric", subject: "Science", grade_level: "Year 9", criteria: [{ code: "C1", description: "Stored criterion", score_max: 5 }] } }));
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_create_rubric_version", { rubricId: 2, expectedVersion: 1, rubric: { title: "Stored rubric", subject: "Science", grade_level: "Year 9", criteria: [{ code: "C1", description: "Stored criterion", score_max: 5, levels: [] }] } }));
 });
 it("refuses duplicate criterion codes before a backend write", async () => {
   const user = userEvent.setup(); render(<Rubrics />);
@@ -32,4 +33,21 @@ it("refuses duplicate criterion codes before a backend write", async () => {
   await user.click(screen.getByRole("button", { name: "Save as new version" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("unique code");
   expect(invokeMock).not.toHaveBeenCalledWith("cmd_create_rubric_version", expect.anything());
+});
+it("saves performance levels with each criterion", async () => {
+  const user = userEvent.setup(); render(<Rubrics />);
+  await waitFor(() => expect(screen.getByLabelText("Title")).toBeEnabled());
+  await user.type(screen.getByLabelText("Title"), "Levels"); await user.type(screen.getByLabelText("Subject"), "Maths"); await user.type(screen.getByLabelText("Year group"), "Year 7");
+  await user.type(screen.getByLabelText("Description 1"), "Solves the equation.");
+  await user.click(screen.getByText("Performance levels (0)"));
+  await user.click(screen.getByRole("button", { name: "Suggest four levels" }));
+  await user.click(screen.getByRole("button", { name: "Save rubric" }));
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_create_rubric", { rubric: expect.objectContaining({ criteria: [expect.objectContaining({ levels: [
+    { label: "Excellent", score: 10, description: "" }, { label: "Good", score: 7.5, description: "" }, { label: "Partial", score: 5, description: "" }, { label: "Not yet", score: 0, description: "" },
+  ] })] }) }));
+});
+it("deletes an unused rubric version after confirmation", async () => {
+  const user = userEvent.setup(); render(<Rubrics />);
+  await user.click(await screen.findByRole("button", { name: "Delete Stored rubric version 1" }));
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_delete_rubric", { rubricId: 2 }));
 });

@@ -99,6 +99,10 @@ async function launch() {
   assert(browser, 'portable WebView2 endpoint did not open');
   page = browser.contexts()[0].pages()[0]; page.setDefaultTimeout(20000);
   page.on('pageerror', error => pageErrors.push(String(error)));
+  // Selectors use the English interface; each launch has a fresh browser profile, so pin it every time.
+  await page.waitForFunction(() => Boolean(window.__TAURI_INTERNALS__));
+  await page.evaluate(() => localStorage.setItem('corregir.language','en'));
+  await page.reload();
   await page.getByRole('heading', {name:'Open your work directory', exact:true}).waitFor();
   const status = await native('cmd_workspace_status');
   assert.equal(status.portable, true); assert.equal(status.opened, false);
@@ -147,9 +151,10 @@ async function assertRecords() {
   await page.getByRole('button',{name:'Save rubric',exact:true}).click();
   await page.getByText('Saved rubric #1.',{exact:false}).waitFor();
   await page.getByRole('button',{name:'Submissions',exact:true}).click();
-  await page.getByLabel('Rubric:',{exact:false}).selectOption('1');
+  await page.getByLabel(/^Rubric/).selectOption('1');
+  await page.getByLabel('Assignment instructions',{exact:true}).fill('Synthetic assignment');
   await page.getByRole('button',{name:'Create assignment',exact:true}).click();
-  await page.getByText('Active assignment: #1',{exact:true}).waitFor();
+  await page.getByRole('heading',{name:'Synthetic assignment',exact:true}).waitFor();
   await assertRecords();
   await native('cmd_export_backup',{destinationPath:backup,password:backupPassword});
   await native('cmd_verify_backup',{sourcePath:backup,password:backupPassword});

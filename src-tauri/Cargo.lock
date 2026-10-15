@@ -794,6 +794,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
+name = "corregir"
+version = "0.4.0"
+dependencies = [
+ "aes-gcm 0.10.3",
+ "aes-gcm 0.11.1",
+ "argon2",
+ "base64 0.22.1",
+ "chrono",
+ "csv",
+ "fs2",
+ "hex",
+ "image",
+ "keyring",
+ "lopdf",
+ "ocrs",
+ "pdfium-render",
+ "quick-xml",
+ "rand",
+ "regex",
+ "reqwest",
+ "rten",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "skrifa",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "windows-sys 0.61.2",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
 name = "cpubits"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4548,45 +4587,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy",
  "windows",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.3.0"
-dependencies = [
- "aes-gcm 0.10.3",
- "aes-gcm 0.11.1",
- "argon2",
- "base64 0.22.1",
- "chrono",
- "csv",
- "fs2",
- "hex",
- "image",
- "keyring",
- "lopdf",
- "ocrs",
- "pdfium-render",
- "quick-xml",
- "rand",
- "regex",
- "reqwest",
- "rten",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "skrifa",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "url",
- "windows-sys 0.61.2",
- "zeroize",
- "zip",
 ]
 
 [[package]]

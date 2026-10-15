@@ -15,6 +15,12 @@ pub enum ReviewError {
     IncompleteAssessment,
     #[error("the assessment changed; reload and review it before confirming")]
     StaleAssessment,
+    #[error("enter a reason of between 1 and 500 characters")]
+    InvalidReason,
+    #[error("only confirmed grades that still have an identified student can be reopened")]
+    NotConfirmed,
+    #[error(transparent)]
+    Redaction(#[from] crate::pipeline::redaction::RedactionError),
 }
 
 pub fn confirm_grade(
@@ -70,6 +76,45 @@ pub fn confirm_grade(
 
     tx.commit()?;
     Ok(total.unwrap_or(0.0))
+}
+
+/// Return a confirmed grade to editing. The reason is kept in the audit payload,
+/// which audit CSV exports exclude.
+pub fn reopen_grade(
+    conn: &Connection,
+    submission_id: i64,
+    reason: &str,
+) -> Result<(), ReviewError> {
+    let reason = reason.trim();
+    if reason.is_empty() || reason.chars().count() > 500 {
+        return Err(ReviewError::InvalidReason);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let changed = tx.execute(
+        "UPDATE submissions SET status_pipeline = 'redacted'
+         WHERE id = ?1 AND status_pipeline = 'grade_confirmed' AND identities_purged_at IS NULL",
+        [submission_id],
+    )?;
+    if changed != 1 {
+        return Err(ReviewError::NotConfirmed);
+    }
+    tx.execute(
+        "UPDATE results SET confirmed_by_teacher = 0, confirmed_at = NULL WHERE submission_id = ?1",
+        [submission_id],
+    )?;
+    // The reason is free text kept in the audit trail, which outlives identity purges
+    // and erasure: known names are replaced as in comments sent to the model.
+    let reason = crate::pipeline::redaction::known_name_redactor(&tx, submission_id)?.apply(reason);
+    tx.execute(
+        "INSERT INTO logs_audit (submission_id, event, actor, payload_json)
+         VALUES (?1, 'grade_reopened', 'teacher', ?2)",
+        rusqlite::params![
+            submission_id,
+            serde_json::json!({ "reason": reason }).to_string()
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -153,6 +198,50 @@ mod tests {
             )
             .unwrap();
         assert_eq!(confirmed, 2);
+    }
+
+    #[test]
+    fn reopening_requires_a_reason_and_allows_a_new_confirmation() {
+        let directory = tempdir().unwrap();
+        let state = schema::open_with_key(directory.path(), [5u8; 32]).unwrap();
+        let guard = state.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
+        let id = prepare_submission_with_results(conn);
+        assert!(matches!(
+            reopen_grade(conn, id, "typo"),
+            Err(ReviewError::NotConfirmed)
+        ));
+        confirm_grade(conn, id, 0).unwrap();
+        assert!(matches!(
+            reopen_grade(conn, id, "  "),
+            Err(ReviewError::InvalidReason)
+        ));
+        reopen_grade(conn, id, "Sum error in C2 for Test Student").unwrap();
+        let (status, confirmed): (String, i64) = conn
+            .query_row(
+                "SELECT status_pipeline, (SELECT COUNT(*) FROM results WHERE submission_id=?1 AND confirmed_by_teacher=1) FROM submissions WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((status.as_str(), confirmed), ("redacted", 0));
+        assert_eq!(confirm_grade(conn, id, 0).unwrap(), 7.5);
+        let reopened: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM logs_audit WHERE event='grade_reopened'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reopened, 1);
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM logs_audit WHERE event='grade_reopened'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(payload.contains("Sum error in C2 for ") && !payload.contains("Student"));
     }
 
     #[test]

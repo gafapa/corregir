@@ -4,7 +4,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::db::DbState;
 use crate::models::AuditLog;
-use crate::pipeline::export;
+use crate::pipeline::export::{self, ReportLanguage};
 use crate::resources;
 
 #[tauri::command]
@@ -13,13 +13,19 @@ pub async fn cmd_export_csv(
     db: State<'_, std::sync::Arc<DbState>>,
     assignment_id: i64,
     destination_path: String,
+    language: Option<ReportLanguage>,
 ) -> Result<usize, String> {
     let db = db.inner().clone();
     crate::tasks::run(db, move |db| {
         let destination = validate_destination(&app, db, &destination_path, "csv")?;
         db.write(|conn| {
-            let rows = export::generate_csv(conn, assignment_id, &destination)
-                .map_err(|e| e.to_string())?;
+            let rows = export::generate_csv(
+                conn,
+                assignment_id,
+                &destination,
+                language.unwrap_or_default(),
+            )
+            .map_err(|e| e.to_string())?;
             Ok(rows)
         })
     })
@@ -49,15 +55,64 @@ pub async fn cmd_export_pdf_feedback(
     db: State<'_, std::sync::Arc<DbState>>,
     submission_id: i64,
     destination_path: String,
+    language: Option<ReportLanguage>,
 ) -> Result<(), String> {
     let db = db.inner().clone();
     crate::tasks::run(db, move |db| {
         let destination = validate_destination(&app, db, &destination_path, "pdf")?;
-        let guard = db.conn.lock().map_err(|e| e.to_string())?;
-        let conn = guard.as_ref().ok_or("the database is closed")?;
         let path_source = resources::path_source_pdf(&app);
-        export::generate_pdf_feedback(conn, submission_id, &path_source, &destination)
+        db.write(|conn| {
+            export::generate_pdf_feedback(
+                conn,
+                submission_id,
+                &path_source,
+                &destination,
+                language.unwrap_or_default(),
+            )
             .map_err(|e| e.to_string())
+        })
+    })
+    .await
+}
+
+/// Write every confirmed feedback sheet of an assignment into a chosen folder.
+#[tauri::command]
+pub async fn cmd_export_pdf_batch(
+    app: AppHandle,
+    db: State<'_, std::sync::Arc<DbState>>,
+    assignment_id: i64,
+    directory_path: String,
+    language: Option<ReportLanguage>,
+) -> Result<usize, String> {
+    let db = db.inner().clone();
+    crate::tasks::run(db, move |db| {
+        // Validate a representative file inside the folder against the protected roots.
+        let probe = Path::new(&directory_path).join("corregir-feedback.pdf");
+        let directory = validate_destination(&app, db, &probe.to_string_lossy(), "pdf")?
+            .parent()
+            .ok_or("missing export directory")?
+            .to_path_buf();
+        let path_source = resources::path_source_pdf(&app);
+        // A partial failure is reported only after the audit row for the reports
+        // already written has been saved.
+        let batch = db.write(|conn| {
+            export::generate_pdf_batch(
+                conn,
+                assignment_id,
+                &path_source,
+                &directory,
+                language.unwrap_or_default(),
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        match batch.failure {
+            None => Ok(batch.written),
+            Some(error) if batch.written > 0 => Err(format!(
+                "{} reports were written before the export stopped: {error}",
+                batch.written
+            )),
+            Some(error) => Err(error.to_string()),
+        }
     })
     .await
 }
