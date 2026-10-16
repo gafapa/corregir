@@ -45,7 +45,7 @@ quick-xml = "0.42"
 hex = "0.4"
 pdfium-render = "0.9"
 ocrs = "0.13"
-rten = "0.26"
+rten = "0.27"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 regex = "1"
 csv = "1"
