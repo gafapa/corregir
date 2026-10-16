@@ -100,6 +100,7 @@ pub async fn cmd_import_submission(
     crate::tasks::run(db,move |db| {
         job.check().map_err(|e|e.to_string())?;
         let path = Path::new(&file_path).canonicalize().map_err(|error| error.to_string())?;
+        let source_name = source_name(&path);
         let source_hash = super::document_review::fingerprint(&path)?;
         let result = crate::document_worker::extract(crate::document_worker::WorkerRequest {
             file_path: path.clone(),
@@ -122,9 +123,8 @@ pub async fn cmd_import_submission(
         job.check().map_err(|e|e.to_string())?;
         let tx=conn.transaction().map_err(|e|e.to_string())?;
         let method=if used_ocr {"ocr_local"} else {"text_native"};
-        tx.execute("INSERT INTO submissions (assignment_id,text_ocr,method_ocr,status_pipeline) VALUES (?1,?2,?3,'ocr_complete')",rusqlite::params![assignment_id,texts.join("\n\n"),method]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO submissions (assignment_id,text_ocr,method_ocr,status_pipeline,source_name,source_sha256) VALUES (?1,?2,?3,'ocr_complete',?4,?5)",rusqlite::params![assignment_id,texts.join("\n\n"),method,source_name,source_hash]).map_err(|e|e.to_string())?;
         let id=tx.last_insert_rowid();
-        tx.execute("INSERT INTO configuration (key,value) VALUES (?1,?2)",rusqlite::params![format!("document.source.{id}"),source_hash]).map_err(|e|e.to_string())?;
         tx.execute("INSERT INTO logs_audit (submission_id,event,actor,payload_json) VALUES (?1,'ocr_complete','system',?2)",rusqlite::params![id,serde_json::json!({"method_ocr":method,"pages":texts.len()}).to_string()]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e|e.to_string())?;
         Ok(id)
@@ -132,6 +132,47 @@ pub async fn cmd_import_submission(
         let _=on_progress.send(ImportProgress {request_id:job.id.clone(),page:texts.len() as u16,total:texts.len() as u16,stage:"saved".into()});
         Ok(id)
     }).await
+}
+
+/// File name only; the folder path is not kept. Names often identify the student, so
+/// this stays in the encrypted workspace and is never sent to the model.
+fn source_name(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy();
+    Some(name.chars().take(255).collect())
+}
+
+/// Delete one submission with its identity link, scores and feedback.
+#[tauri::command]
+pub async fn cmd_delete_submission(
+    db: State<'_, Arc<DbState>>,
+    submission_id: i64,
+) -> Result<(), String> {
+    crate::tasks::run(db.inner().clone(), move |db| {
+        db.write(|conn| delete_submission(conn, submission_id))
+    })
+    .await
+}
+
+pub(crate) fn delete_submission(
+    conn: &mut rusqlite::Connection,
+    submission_id: i64,
+) -> Result<(), String> {
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let assignment_id: i64 = tx
+        .query_row(
+            "SELECT assignment_id FROM submissions WHERE id=?1",
+            [submission_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "the submission no longer exists")?;
+    tx.execute("DELETE FROM submissions WHERE id=?1", [submission_id])
+        .map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO logs_audit (event, actor, payload_json) VALUES ('submission_deleted', 'teacher', ?1)",
+        [serde_json::json!({"submission_id": submission_id, "assignment_id": assignment_id}).to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -145,7 +186,10 @@ pub async fn cmd_list_submissions(
     let conn = guard.as_ref().ok_or("the database is closed")?;
     let mut stmt = conn
         .prepare(
-            "SELECT e.id, e.assignment_id, e.text_ocr, e.method_ocr, e.status_pipeline, m.student_name
+            "SELECT e.id, e.assignment_id, COALESCE(e.text_ocr, e.text_redacted), e.method_ocr,
+                    e.status_pipeline, m.student_name, m.student_id, e.source_name,
+                    e.identities_purged_at IS NOT NULL,
+                    EXISTS(SELECT 1 FROM results r WHERE r.submission_id = e.id AND r.ai_evidence_json IS NOT NULL)
              FROM submissions e
              LEFT JOIN alias_student_map m ON m.alias = e.alias
              WHERE e.assignment_id = ?1 ORDER BY e.id",
@@ -160,6 +204,10 @@ pub async fn cmd_list_submissions(
                 method_ocr: row.get(3)?,
                 status_pipeline: row.get(4)?,
                 student_name: row.get(5)?,
+                student_id: row.get(6)?,
+                source_name: row.get(7)?,
+                identities_purged: row.get(8)?,
+                has_evidence: row.get(9)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -168,4 +216,37 @@ pub async fn cmd_list_submissions(
     Ok(rows)
 
     }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deleting_a_submission_removes_its_identity_and_keeps_an_audit_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::db::schema::open_with_key(directory.path(), [12; 32]).unwrap();
+        let mut guard = db.conn.lock().unwrap();
+        let conn = guard.as_mut().unwrap();
+        conn.execute_batch("INSERT INTO rubrics (id,title,subject,grade_level,content_json) VALUES (1,'t','s','g','{}'); INSERT INTO assignments (id,rubric_id,text) VALUES (1,1,'task'); INSERT INTO submissions (id,assignment_id,text_ocr,status_pipeline) VALUES (5,1,'Ana answers','ocr_complete');").unwrap();
+        crate::pipeline::redaction::confirm(conn, 5, &[], "Ana", None).unwrap();
+        delete_submission(conn, 5).unwrap();
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM submissions)+(SELECT COUNT(*) FROM alias_student_map)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+        let payload: String = conn
+            .query_row(
+                "SELECT payload_json FROM logs_audit WHERE event='submission_deleted'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(payload.contains("\"submission_id\":5"));
+        assert!(delete_submission(conn, 5).is_err());
+    }
 }

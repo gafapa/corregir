@@ -18,7 +18,7 @@ if (!$installer) { throw 'Qualification installer version 0.1.1 is missing.' }
 Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $runDirectory $installer.Name)
 $installation = Start-Process -FilePath $installer.FullName -ArgumentList '/S',"/D=$installDirectory" -Wait -PassThru -WindowStyle Hidden
 if ($installation.ExitCode -ne 0) { throw 'Clean installation failed.' }
-$application = Join-Path $installDirectory 'tauri-app.exe'
+$application = Join-Path $installDirectory 'corregir.exe'
 if (!(Test-Path -LiteralPath $application)) { throw 'Installed application is missing.' }
 $manifest = Get-Content (Join-Path $installDirectory 'manifest.json') -Raw | ConvertFrom-Json
 foreach ($resource in $manifest.resources) {

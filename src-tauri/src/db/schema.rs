@@ -15,6 +15,9 @@ use zeroize::Zeroizing;
 const INITIAL_MIGRATION: &str = include_str!("migrations/0001_init.sql");
 const LEGACY_SCHEMA_MIGRATION: &str = include_str!("migrations/0002_legacy_names.sql");
 const STATE_MIGRATION: &str = include_str!("migrations/0003_workflow.sql");
+const CLASSROOM_MIGRATION: &str = include_str!("migrations/0004_classroom.sql");
+/// `PRAGMA user_version` after every migration in this file has been applied.
+const SCHEMA_VERSION: i64 = 4;
 const ENCRYPTED_DB_NAME: &str = "corregir.sqlite.enc";
 const MAX_DATABASE_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -36,6 +39,8 @@ pub enum DbError {
     AlreadyOpen,
     #[error("database exceeds the 512 MiB safety limit or is corrupt")]
     InvalidDatabase,
+    #[error("this work directory was saved by a newer version of Corregir; update the application before opening it")]
+    NewerSchema,
 }
 
 pub struct DbState {
@@ -227,6 +232,44 @@ pub(crate) fn lock_directory(directory: &Path) -> Result<File, DbError> {
     Ok(directory_lock)
 }
 
+/// Bring any supported workspace, including a restored backup, to the current schema.
+pub fn migrate(conn: &mut Connection) -> Result<(), DbError> {
+    // An older application must not write to a schema it does not know.
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        return Err(DbError::NewerSchema);
+    }
+    let legacy_schema: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='rubricas')",
+        [],
+        |row| row.get(0),
+    )?;
+    if legacy_schema {
+        let tx = conn.transaction()?;
+        tx.execute_batch(LEGACY_SCHEMA_MIGRATION)?;
+        tx.commit()?;
+    }
+    conn.execute_batch(INITIAL_MIGRATION)?;
+    let has_revision: bool = conn
+        .prepare("PRAGMA table_info(submissions)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "grade_revision");
+    if !has_revision {
+        let tx = conn.transaction()?;
+        tx.execute_batch(STATE_MIGRATION)?;
+        tx.commit()?;
+    }
+    if version < SCHEMA_VERSION {
+        let tx = conn.transaction()?;
+        tx.execute_batch(CLASSROOM_MIGRATION)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
 pub(crate) fn open_locked(
     directory: &Path,
     key: [u8; 32],
@@ -254,28 +297,7 @@ pub(crate) fn open_locked(
     if integrity != "ok" {
         return Err(DbError::InvalidDatabase);
     }
-    let legacy_schema: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='rubricas')",
-        [],
-        |row| row.get(0),
-    )?;
-    if legacy_schema {
-        let tx = conn.transaction()?;
-        tx.execute_batch(LEGACY_SCHEMA_MIGRATION)?;
-        tx.commit()?;
-    }
-    conn.execute_batch(INITIAL_MIGRATION)?;
-    let has_revision: bool = conn
-        .prepare("PRAGMA table_info(submissions)")?
-        .query_map([], |r| r.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|name| name == "grade_revision");
-    if !has_revision {
-        let tx = conn.transaction()?;
-        tx.execute_batch(STATE_MIGRATION)?;
-        tx.commit()?;
-    }
+    migrate(&mut conn)?;
     let state = DbState {
         conn: Mutex::new(Some(conn)),
         directory: directory.to_path_buf(),
@@ -305,6 +327,19 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     const KEY: [u8; 32] = [42; 32];
+
+    #[test]
+    fn schemas_from_newer_versions_are_refused_unchanged() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        assert!(matches!(migrate(&mut conn), Err(DbError::NewerSchema)));
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION + 1);
+    }
     #[cfg(windows)]
     #[test]
     fn an_actual_windows_replacement_failure_never_publishes_the_mutation() {

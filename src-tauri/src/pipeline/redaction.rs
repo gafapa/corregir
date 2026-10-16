@@ -2,8 +2,9 @@
 //! `load_confirmed` can construct `ConfirmedRedactedText`, so unreviewed text
 //! cannot enter the AI pipeline. See the privacy boundary in ARCHITECTURE.md.
 
+use super::identifiers::NAME_PARTICLES;
 use rand::RngExt;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -111,6 +112,7 @@ pub fn confirm(
         student_name,
         student_class_id,
         None,
+        None,
     )
 }
 
@@ -173,12 +175,14 @@ pub fn preview(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn confirm_preview(
     conn: &Connection,
     submission_id: i64,
     spans: &[(usize, usize)],
     student_name: &str,
     student_class_id: Option<&str>,
+    student_id: Option<i64>,
     alias: &str,
     expected_text: &str,
 ) -> Result<ConfirmedRedactedText, RedactionError> {
@@ -188,6 +192,7 @@ pub fn confirm_preview(
         spans,
         student_name,
         student_class_id,
+        student_id,
         Some((alias, expected_text)),
     )
 }
@@ -198,9 +203,27 @@ fn confirm_internal(
     spans_to_redact: &[(usize, usize)],
     student_name: &str,
     student_class_id: Option<&str>,
+    student_id: Option<i64>,
     expected: Option<(&str, &str)>,
 ) -> Result<ConfirmedRedactedText, RedactionError> {
     let tx = conn.unchecked_transaction()?;
+    if let Some(student_id) = student_id {
+        // A roster selection must match the name used for redaction and belong to
+        // the class linked to this submission's assignment.
+        let roster_name: Option<String> = tx
+            .query_row(
+                "SELECT st.full_name FROM students st
+                 JOIN assignments a ON a.class_id = st.class_id
+                 JOIN submissions s ON s.assignment_id = a.id
+                 WHERE st.id = ?1 AND s.id = ?2",
+                rusqlite::params![student_id, submission_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if roster_name.as_deref().map(str::trim) != Some(student_name.trim()) {
+            return Err(RedactionError::InvalidName);
+        }
+    }
     let status: String = tx.query_row(
         "SELECT status_pipeline FROM submissions WHERE id = ?1",
         [submission_id],
@@ -246,8 +269,8 @@ fn confirm_internal(
         rusqlite::params![text_redacted, alias, submission_id],
     )?;
     conn.execute(
-        "INSERT INTO alias_student_map (alias, student_name, student_class_id, submission_id) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![alias, student_name, student_class_id, submission_id],
+        "INSERT INTO alias_student_map (alias, student_name, student_class_id, submission_id, student_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![alias, student_name.trim(), student_class_id, submission_id, student_id],
     )?;
     conn.execute(
         "INSERT INTO logs_audit (submission_id, event, actor, payload_json) VALUES (?1, 'redaction_confirmed', 'teacher', ?2)",
@@ -262,6 +285,184 @@ fn confirm_internal(
         text: text_redacted,
         alias,
     })
+}
+
+/// Replacement for the names of people other than the submission's student.
+pub const OTHER_NAME_PLACEHOLDER: &str = "[…]";
+
+/// How a known name is replaced. The order is the precedence when the same text
+/// belongs to several names: the submission's own student always wins.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum NameMatch {
+    /// A distinctive part of another person's name. Replaced only when capitalized,
+    /// because surnames such as "Vila" or given names such as "Mar" are also words.
+    OtherPart,
+    /// A part of the text's own student's name that another person shares: the text
+    /// is about its own student, so it is left unchanged.
+    Keep,
+    /// Another person's full name, in any case.
+    OtherFull,
+    /// The submission's own student: full name or any distinctive part, in any case.
+    Own,
+}
+
+fn name_key(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn name_parts(name: &str) -> impl Iterator<Item = &str> {
+    name.split_whitespace().filter(|part| {
+        part.chars().count() >= 3 && !NAME_PARTICLES.contains(&part.to_lowercase().as_str())
+    })
+}
+
+/// Replaces known names in teacher-written text (criterion comments, feedback).
+pub struct NameRedactor {
+    pattern: Option<regex::Regex>,
+    kinds: std::collections::HashMap<String, NameMatch>,
+    alias: String,
+    own_name: String,
+}
+
+impl NameRedactor {
+    fn new(own: Option<(&str, &str)>, others: &[String]) -> Result<Self, RedactionError> {
+        Self::build(own, others, None)
+    }
+
+    /// `protected`: the name of the student a text is about. Parts of it that are
+    /// shared with `others` are kept; full names in `others` are still replaced.
+    fn build(
+        own: Option<(&str, &str)>,
+        others: &[String],
+        protected: Option<&str>,
+    ) -> Result<Self, RedactionError> {
+        let mut kinds = std::collections::HashMap::new();
+        let mut add = |text: &str, kind: NameMatch| {
+            let key = name_key(text);
+            if !key.is_empty() {
+                let entry = kinds.entry(key).or_insert(kind);
+                *entry = (*entry).max(kind);
+            }
+        };
+        for name in others {
+            name_parts(name).for_each(|part| add(part, NameMatch::OtherPart));
+            add(name, NameMatch::OtherFull);
+        }
+        if let Some(name) = protected {
+            name_parts(name).for_each(|part| add(part, NameMatch::Keep));
+        }
+        let (alias, own_name) = match own {
+            Some((name, alias)) => {
+                name_parts(name).for_each(|part| add(part, NameMatch::Own));
+                add(name, NameMatch::Own);
+                (alias.to_string(), name.trim().to_string())
+            }
+            None => (String::new(), String::new()),
+        };
+        let mut keys: Vec<&String> = kinds.keys().collect();
+        // Longest first so a full name is replaced before its parts.
+        keys.sort_by_key(|key| (std::cmp::Reverse(key.chars().count()), key.as_str()));
+        let alternatives: Vec<String> = keys
+            .iter()
+            .map(|key| {
+                key.split(' ')
+                    .map(regex::escape)
+                    .collect::<Vec<_>>()
+                    .join(r"\s+")
+            })
+            .collect();
+        let pattern = if alternatives.is_empty() {
+            None
+        } else {
+            Some(
+                regex::RegexBuilder::new(&format!(r"\b(?:{})\b", alternatives.join("|")))
+                    .case_insensitive(true)
+                    .size_limit(64 << 20)
+                    .build()
+                    .map_err(|_| RedactionError::InvalidName)?,
+            )
+        };
+        Ok(Self {
+            pattern,
+            kinds,
+            alias,
+            own_name,
+        })
+    }
+
+    /// Put the student's name back where model output addresses the student by the
+    /// alias. Applied locally, after the model call, to text the teacher reviews.
+    pub fn reveal(&self, text: &str) -> String {
+        if self.alias.is_empty() {
+            text.to_string()
+        } else {
+            text.replace(&self.alias, &self.own_name)
+        }
+    }
+
+    pub fn apply(&self, text: &str) -> String {
+        let Some(pattern) = &self.pattern else {
+            return text.to_string();
+        };
+        pattern
+            .replace_all(text, |captures: &regex::Captures| {
+                let found = &captures[0];
+                match self.kinds.get(&name_key(found)) {
+                    Some(NameMatch::Own) => self.alias.clone(),
+                    Some(NameMatch::Keep) => found.to_string(),
+                    Some(NameMatch::OtherPart)
+                        if !found.chars().next().is_some_and(char::is_uppercase) =>
+                    {
+                        found.to_string()
+                    }
+                    _ => OTHER_NAME_PLACEHOLDER.to_string(),
+                }
+            })
+            .into_owned()
+    }
+}
+
+/// Redactor for teacher-written text about one submission: the confirmed student's
+/// name becomes the alias, and the names of the assignment's other students and of
+/// its class roster become a placeholder.
+pub fn known_name_redactor(
+    conn: &Connection,
+    submission_id: i64,
+) -> Result<NameRedactor, RedactionError> {
+    let (alias, name, assignment_id): (String, String, i64) = conn
+        .query_row(
+            "SELECT s.alias, m.student_name, s.assignment_id FROM submissions s
+             JOIN alias_student_map m ON m.alias = s.alias WHERE s.id = ?1",
+            [submission_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?
+        .ok_or(RedactionError::NotRedacted(submission_id))?;
+    let others: Vec<String> = conn
+        .prepare(
+            "SELECT m.student_name FROM alias_student_map m
+             JOIN submissions s ON s.id = m.submission_id
+             WHERE s.assignment_id = ?1 AND s.id <> ?2
+             UNION
+             SELECT st.full_name FROM students st
+             JOIN assignments a ON a.class_id = st.class_id WHERE a.id = ?1",
+        )?
+        .query_map(rusqlite::params![assignment_id, submission_id], |row| {
+            row.get(0)
+        })?
+        .collect::<Result<_, _>>()?;
+    NameRedactor::new(Some((&name, &alias)), &others)
+}
+
+/// Redactor that replaces one person's name with the placeholder in other records,
+/// for erasure requests. `owner` is the student the record belongs to: the parts of
+/// the erased name that are also part of the owner's name are left in place, so
+/// "Ana" stays in Ana López's own feedback when Ana Pérez is erased.
+pub fn name_scrubber(name: &str, owner: Option<&str>) -> Result<NameRedactor, RedactionError> {
+    NameRedactor::build(None, &[name.to_string()], owner)
 }
 
 /// Recovers the already persisted confirmation. Fails if the submission has not passed through `confirm` — it is the check that prevents the Milestone 5 from using a text not reviewed.
@@ -317,6 +518,7 @@ mod tests {
                 &[],
                 "Another name",
                 None,
+                None,
                 &reviewed.alias,
                 &reviewed.text
             ),
@@ -329,12 +531,102 @@ mod tests {
             &[],
             " José ",
             None,
+            None,
             &reviewed.alias,
             &reviewed.text,
         )
         .unwrap();
         assert_eq!(confirmed.text(), reviewed.text);
         assert!(preview(conn, id, &[], "José").is_err());
+    }
+
+    #[test]
+    fn roster_links_must_match_the_class_and_comments_hide_the_known_name() {
+        let directory = tempdir().unwrap();
+        let state = schema::open_with_key(directory.path(), [10; 32]).unwrap();
+        let guard = state.conn.lock().unwrap();
+        let conn = guard.as_ref().unwrap();
+        let id = prepare_test_submission(conn, "Uxía da Silva answers the question.");
+        conn.execute_batch("INSERT INTO classes (id,name) VALUES (1,'3B'),(2,'4A'); INSERT INTO students (id,class_id,full_name) VALUES (1,1,'Uxía da Silva'),(2,2,'Other Student'); UPDATE assignments SET class_id=1;").unwrap();
+        let reviewed = preview(conn, id, &[], "Uxía da Silva").unwrap();
+        assert!(matches!(
+            confirm_preview(
+                conn,
+                id,
+                &[],
+                "Uxía da Silva",
+                None,
+                Some(2),
+                &reviewed.alias,
+                &reviewed.text
+            ),
+            Err(RedactionError::InvalidName)
+        ));
+        confirm_preview(
+            conn,
+            id,
+            &[],
+            "Uxía da Silva",
+            None,
+            Some(1),
+            &reviewed.alias,
+            &reviewed.text,
+        )
+        .unwrap();
+        let linked: i64 = conn
+            .query_row("SELECT student_id FROM alias_student_map", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(linked, 1);
+        let comment = known_name_redactor(conn, id)
+            .unwrap()
+            .apply("UXÍA: revisa a parte da derivada. Silva!");
+        assert_eq!(
+            comment,
+            format!("{0}: revisa a parte da derivada. {0}!", reviewed.alias)
+        );
+        conn.execute(
+            "INSERT INTO students (id,class_id,full_name) VALUES (3,1,'Mar Vila Castro')",
+            [],
+        )
+        .unwrap();
+        let comment = known_name_redactor(conn, id).unwrap().apply(
+            "Uxía, compara co texto de MAR VILA castro e de Mar. O mar e a vila. Other Student.",
+        );
+        assert_eq!(
+            comment,
+            format!(
+                "{}, compara co texto de […] e de […]. O mar e a vila. Other Student.",
+                reviewed.alias
+            )
+        );
+    }
+
+    #[test]
+    fn other_names_need_capitals_for_parts_and_large_rosters_compile() {
+        let others: Vec<String> = (0..600)
+            .map(|i| format!("Nome{i} Apelido{i} Vila"))
+            .collect();
+        let redactor = NameRedactor::new(Some(("Uxía da Silva", "a1b2c3d4")), &others).unwrap();
+        assert_eq!(
+            redactor.apply("Nome7  Apelido7\nVila e a vila de uxía"),
+            "[…] e a vila de a1b2c3d4"
+        );
+        assert_eq!(
+            redactor.reveal("a1b2c3d4, bo traballo."),
+            "Uxía da Silva, bo traballo."
+        );
+        let scrubber = name_scrubber("Mar Vila", None).unwrap();
+        assert_eq!(
+            scrubber.apply("Mar escribiu sobre o mar. MAR VILA"),
+            "[…] escribiu sobre o mar. […]"
+        );
+        let namesake = name_scrubber("Mar Vila", Some("Mar Souto")).unwrap();
+        assert_eq!(
+            namesake.apply("Mar, compara con Vila e con Mar Vila."),
+            "Mar, compara con […] e con […]."
+        );
     }
 
     fn prepare_test_submission(conn: &Connection, text_ocr: &str) -> i64 {

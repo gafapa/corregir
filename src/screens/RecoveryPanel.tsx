@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useI18n } from "../lib/i18n";
 
 export function RecoveryPanel({ reason }: { reason: string }) {
+  const { t, errorText } = useI18n();
   const [source, setSource] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -10,9 +12,9 @@ export function RecoveryPanel({ reason }: { reason: string }) {
   async function chooseBackup() {
     setBusy(true); setError(null);
     try {
-      const path = await open({ multiple: false, filters: [{ name: "Encrypted workspace", extensions: ["corregirbackup"] }] });
+      const path = await open({ multiple: false, filters: [{ name: t("backup.fileType"), extensions: ["corregirbackup"] }] });
       if (typeof path === "string") setSource(path);
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
   async function recover() {
@@ -20,23 +22,23 @@ export function RecoveryPanel({ reason }: { reason: string }) {
     try {
       await invoke("cmd_recover_workspace", { sourcePath: source, password });
       window.location.reload();
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); setPassword(""); }
   }
   return <section>
-    <h2>Recover your workspace</h2>
-    <p role="alert">{reason}</p>
-    <p>Choose an encrypted backup and enter its password. Recovery restores the records present when that backup was created. The original encrypted file is preserved before replacement.</p>
+    <h2>{t("recovery.title")}</h2>
+    <p role="alert">{errorText(reason)}</p>
+    <p>{t("recovery.description")}</p>
     <fieldset disabled={busy}>
-      <legend>Encrypted backup</legend>
-      <button type="button" onClick={() => void chooseBackup()}>Choose backup</button>
+      <legend>{t("recovery.legend")}</legend>
+      <button type="button" onClick={() => void chooseBackup()}>{t("recovery.choose")}</button>
       {source && <p className="path-label">{source}</p>}
-      <label htmlFor="recovery-password">Backup password</label>
+      <label htmlFor="recovery-password">{t("backup.password")}</label>
       <input id="recovery-password" type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} />
-      <div className="action-row"><button type="button" className="button-primary" disabled={!source || [...password].length < 12} onClick={() => void recover()}>Recover and preserve original file</button></div>
+      <div className="action-row"><button type="button" className="button-primary" disabled={!source || [...password].length < 12} onClick={() => void recover()}>{t("recovery.recover")}</button></div>
     </fieldset>
-    {busy && <p role="status">Recovering workspace…</p>}
+    {busy && <p role="status">{t("recovery.busy")}</p>}
     {error && <p role="alert">{error}</p>}
-    <p>Without the original device credential or a previously created backup and its password, the encrypted records cannot be recovered.</p>
+    <p>{t("recovery.warning")}</p>
   </section>;
 }

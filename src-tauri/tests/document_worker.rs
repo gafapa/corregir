@@ -1,9 +1,9 @@
+use corregir_lib::document_worker::{extract_with_executable, WorkerRequest};
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
-use tauri_app_lib::document_worker::{extract_with_executable, WorkerRequest};
 
 fn request(path: PathBuf) -> WorkerRequest {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -28,7 +28,7 @@ fn fixture(name: &str) -> PathBuf {
 
 #[test]
 fn actual_worker_extracts_native_and_mixed_pages_without_opening_a_workspace() {
-    let executable = Path::new(env!("CARGO_BIN_EXE_tauri-app"));
+    let executable = Path::new(env!("CARGO_BIN_EXE_corregir"));
     let cancelled = AtomicBool::new(false);
     let native = extract_with_executable(
         executable,
@@ -59,7 +59,7 @@ fn cancelling_an_actual_ocr_worker_stops_before_any_result_is_saved() {
     let cancelled = AtomicBool::new(false);
     let mut cancelled_at = None;
     let result = extract_with_executable(
-        Path::new(env!("CARGO_BIN_EXE_tauri-app")),
+        Path::new(env!("CARGO_BIN_EXE_corregir")),
         request(fixture("language-student-2-scanned.pdf")),
         &cancelled,
         |_, _| {
@@ -83,7 +83,7 @@ fn a_malformed_document_fails_without_crashing_the_host() {
     let path = directory.path().join("damaged.pdf");
     std::fs::write(&path, b"invalid PDF fixture").unwrap();
     let result = extract_with_executable(
-        Path::new(env!("CARGO_BIN_EXE_tauri-app")),
+        Path::new(env!("CARGO_BIN_EXE_corregir")),
         request(path),
         &AtomicBool::new(false),
         |_, _| {},
@@ -93,7 +93,7 @@ fn a_malformed_document_fails_without_crashing_the_host() {
 }
 #[test]
 fn actual_worker_returns_a_bounded_page_preview_and_rejects_invalid_pages() {
-    let executable = Path::new(env!("CARGO_BIN_EXE_tauri-app"));
+    let executable = Path::new(env!("CARGO_BIN_EXE_corregir"));
     let mut preview_request = request(fixture("language-student-1.pdf"));
     preview_request.preview_page = Some(1);
     let result = extract_with_executable(
@@ -124,12 +124,12 @@ fn restricted_worker_cannot_read_other_files_reopen_the_source_or_connect_to_loo
     std::fs::write(&private, b"private synthetic sentinel").unwrap();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let mut probe = request(fixture("language-student-1.pdf"));
-    probe.sandbox_probe = Some(tauri_app_lib::document_worker::SandboxProbe {
+    probe.sandbox_probe = Some(corregir_lib::document_worker::SandboxProbe {
         private_path: private.clone(),
         address: listener.local_addr().unwrap(),
     });
     let result = extract_with_executable(
-        Path::new(env!("CARGO_BIN_EXE_tauri-app")),
+        Path::new(env!("CARGO_BIN_EXE_corregir")),
         probe,
         &AtomicBool::new(false),
         |_, _| {},

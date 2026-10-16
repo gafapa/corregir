@@ -46,8 +46,8 @@ pub async fn cmd_preview_document(
         let expected: String = {
             let guard = db.conn.lock().map_err(|error| error.to_string())?;
             let conn = guard.as_ref().ok_or("the database is closed")?;
-            conn.query_row("SELECT value FROM configuration WHERE key=?1", [format!("document.source.{submission_id}")], |row| row.get(0))
-                .optional().map_err(|error| error.to_string())?.ok_or("this older submission has no source fingerprint; compare the original outside the app or import it as a new submission")?
+            conn.query_row("SELECT source_sha256 FROM submissions WHERE id=?1", [submission_id], |row| row.get::<_, Option<String>>(0))
+                .optional().map_err(|error| error.to_string())?.flatten().ok_or("this older submission has no source fingerprint; compare the original outside the app or import it as a new submission")?
         };
         let path = Path::new(&file_path).canonicalize().map_err(|error| error.to_string())?;
         if fingerprint(&path)? != expected { return Err("this file does not match the imported submission; select its original document".into()); }
@@ -91,11 +91,8 @@ fn save_text(
     }
     // Retain the initial extraction inside the encrypted workspace, never in audit payloads.
     tx.execute(
-        "INSERT OR IGNORE INTO configuration (key,value) VALUES (?1,?2)",
-        params![
-            format!("document.original_text.{submission_id}"),
-            expected_text
-        ],
+        "UPDATE submissions SET text_initial=COALESCE(text_initial,?1) WHERE id=?2",
+        params![expected_text, submission_id],
     )
     .map_err(|error| error.to_string())?;
     tx.execute(
@@ -152,7 +149,7 @@ mod tests {
             let conn = guard.as_ref().unwrap();
             let initial: String = conn
                 .query_row(
-                    "SELECT value FROM configuration WHERE key='document.original_text.1'",
+                    "SELECT text_initial FROM submissions WHERE id=1",
                     [],
                     |row| row.get(0),
                 )

@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Diagnostics } from "./Diagnostics";
-const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn(async (command: string) => command === "cmd_load_ollama_settings" ? { url: "http://localhost:11435", model: "llama3.2:3b" } : "Connected") }));
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn(async (command: string) => command === "cmd_load_ollama_settings" ? { url: "http://localhost:11435", model: "llama3.2:3b" } : command === "cmd_load_preferences" ? { feedback_language: "auto", retention_days: null } : "Connected") }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 it("restores configuration and saves the selected model used for subsequent correction", async () => {
@@ -14,4 +14,11 @@ it("restores configuration and saves the selected model used for subsequent corr
   await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_save_ollama_settings", { settings: { url: "http://localhost:11435", model: "qwen3:8b" } }));
   await user.click(screen.getByRole("button", { name: "Test AI connection" }));
   await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_test_ai_connection", { url: "http://localhost:11435", model: "qwen3:8b" }));
+});
+it("saves the feedback language preference", async () => {
+  const user = userEvent.setup(); render(<Diagnostics />);
+  const select = await screen.findByLabelText("Language of AI feedback drafts");
+  await waitFor(() => expect(select).toBeEnabled());
+  await user.selectOptions(select, "gl");
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cmd_save_preferences", { preferences: { feedback_language: "gl", retention_days: null } }));
 });

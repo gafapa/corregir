@@ -55,6 +55,26 @@ struct OllamaResponseMessage {
     content: String,
 }
 
+/// Conservative token estimate. Latin letters average over three characters per
+/// token in Galician and Spanish prose (measured 3.2–3.5 with qwen3:8b); spaces are
+/// counted as half a token, and digits, punctuation, symbols and other scripts as
+/// one token each because tokenizers often split them individually. A 25% margin
+/// covers formula-heavy answers. Counting every byte as a token used to reject
+/// ordinary multi-page answers.
+fn estimate_tokens(text: &str) -> usize {
+    let (mut letters, mut spaces, mut other) = (0usize, 0usize, 0usize);
+    for c in text.chars() {
+        if c.is_ascii_alphabetic() || (('\u{C0}'..='\u{24F}').contains(&c) && c.is_alphabetic()) {
+            letters += 1;
+        } else if c == ' ' {
+            spaces += 1;
+        } else {
+            other += 1;
+        }
+    }
+    (letters.div_ceil(3) + spaces.div_ceil(2) + other).saturating_mul(5) / 4
+}
+
 pub struct InferenceClient {
     base_url: String,
     http: reqwest::Client,
@@ -123,8 +143,10 @@ impl InferenceClient {
         user: &str,
         schema: &serde_json::Value,
     ) -> Result<serde_json::Value, InferenceError> {
-        // UTF-8 bytes conservatively bound token count; reserve output and template space.
-        let context_budget = system.len().saturating_add(user.len()).saturating_add(2560);
+        // Reserve output (num_predict) and chat-template space on top of the prompt.
+        let context_budget = estimate_tokens(system)
+            .saturating_add(estimate_tokens(user))
+            .saturating_add(2560);
         if context_budget > 32768 {
             return Err(InferenceError::InputTooLarge);
         }
@@ -220,9 +242,19 @@ mod tests {
     async fn rejects_oversized_prompts_before_network_access() {
         let result = InferenceClient::new("http://127.0.0.1:1")
             .unwrap()
-            .chat_json("test", "system", &"x".repeat(32768))
+            .chat_json("test", "system", &"1".repeat(32768))
             .await;
         assert!(matches!(result, Err(InferenceError::InputTooLarge)));
+    }
+
+    #[test]
+    fn token_estimate_covers_measured_counts_and_allows_longer_prose() {
+        // Prompt token counts measured with qwen3:8b on 2026-10-11.
+        let galician = "O poema fala da saudade e dunha sombra que persegue sempre á autora, mesmo cando ela pensa que xa marchou. A sombra é unha metáfora da tristura e da morte. Tamén hai unha anáfora porque se repite cando ao comezo de varios versos, e iso dalle ritmo. Ademais usa a antítese entre luz e sombra. En conclusión, gustoume moito porque expresa ben o sentimento de angustia que ten a autora. Os nenos e as nenas do instituto traballaron xuntos na biblioteca durante a semana.";
+        let formulas = "v = v0 + a*t = 0 + 2*5 = 10 m/s; s = 1/2 * a * t^2 = 0.5 * 2 * 25 = 25 m. 123456789 9.81 3.14159 (x+1)^2 = x^2 + 2x + 1";
+        assert!(estimate_tokens(galician) >= 144);
+        assert!(estimate_tokens(formulas) >= 92);
+        assert!(estimate_tokens(galician) < galician.len() / 2);
     }
 
     fn response_server(response: String) -> (String, std::thread::JoinHandle<()>) {
