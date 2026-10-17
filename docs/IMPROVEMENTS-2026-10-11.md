@@ -81,9 +81,15 @@ A review of the complete change on 2026-10-16 found the following, fixed before 
 
 Rust: 84 library tests and 5 integration tests pass; frontend 42 tests and TypeScript pass. On GitHub, the Verify workflow passed for the pull request (runs 38816546139 and 38818702493). The installed-application qualification passed all phases on a hosted Windows runner (run 38818698331), after its harness received the hosted WebView2 debugging policy described in [WINDOWS-CI.md](WINDOWS-CI.md). Two findings were kept as documented limits below. A third, marking saved feedback as AI-assisted whenever a current AI draft exists, is intended: it may over-disclose AI assistance but never hides it.
 
+### Publication
+
+Prerelease [v0.4.0](https://github.com/gafapa/corregir/releases/tag/v0.4.0), tagged at merge commit `48c7455`. Both downloads come from Windows installer workflow run 38892721409 on that commit, which installed the installer and qualified the portable ZIP on a hosted runner. The Verify workflow also passed on that commit. The public downloads were fetched again after publication and match:
+
+- `Corregir_0.4.0_x64-setup.exe`: SHA-256 `84aac031097770fb65c9d65399d9323824ab0af901603c88944aae1851f2674a`
+- `Corregir_0.4.0_windows_x64_portable.zip`: SHA-256 `832e1fd2cab802fa14b747fab8c67a9b7dfe9a4e30cc8bc9a10449f1c10844ed`
+
 ## Remaining limits
 
-- The hosted packaging workflow has not run; it builds the release installer and ZIP on request.
 - Native confirmation and file dialogs of the normal build remain outside automation; the qualification build substitutes them.
 - Nicknames and other free-text identifiers in teacher comments are not detected.
 - Access and erasure requests identify a student by name. Two different students with the same name are treated as one; the Privacy section shows how many submissions and roster entries each name has, which the teacher should check first.

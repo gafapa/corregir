@@ -40,7 +40,6 @@ See [IMPROVEMENTS-2026-10-11.md](IMPROVEMENTS-2026-10-11.md#release-preparation)
 
 ## Limits
 
-- Hosted CI and the hosted packaging workflow run only after the commit is pushed; their results and the artifact digests are recorded on the GitHub release.
 - Nicknames and other identifiers typed in teacher comments are not detected automatically.
 - Access and erasure requests find a student by name, so two students with the same name are treated as one. Check the number of submissions and roster entries shown before erasing.
 - After an identity purge, the purged students' names are known only from the class roster when the assignment's pending submissions are graded.
