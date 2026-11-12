@@ -50,7 +50,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 regex = "1"
 csv = "1"
 lopdf = "0.45"
-skrifa = "0.47"
+skrifa = "0.48"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
