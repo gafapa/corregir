@@ -23,8 +23,8 @@ pub async fn cmd_export_backup(
         let path =
             super::export::validate_destination(&app, db, &destination_path, "corregirbackup")?;
         let encrypted = {
-            let guard = db.conn.lock().map_err(|error| error.to_string())?;
-            backup::encrypt(guard.as_ref().ok_or("the database is closed")?, &password)?
+            let mut guard = db.conn.lock().map_err(|error| error.to_string())?;
+            backup::encrypt(guard.as_mut().ok_or("the database is closed")?, &password)?
         };
         // Exercise the real recovery decoder before declaring a backup usable.
         let _verified = backup::decrypt(&encrypted, &password)?;
@@ -247,8 +247,8 @@ mod tests {
         let db = crate::db::schema::open_with_key(directory.path(), [23; 32]).unwrap();
         assert!(backup_health(&db).unwrap().needs_backup);
         let bytes = {
-            let guard = db.conn.lock().unwrap();
-            backup::encrypt(guard.as_ref().unwrap(), "synthetic backup password").unwrap()
+            let mut guard = db.conn.lock().unwrap();
+            backup::encrypt(guard.as_mut().unwrap(), "synthetic backup password").unwrap()
         };
         let path = directory.path().join("synthetic.corregirbackup");
         std::fs::write(&path, &bytes).unwrap();

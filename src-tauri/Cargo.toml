@@ -32,7 +32,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 thiserror = "2"
 url = "2"
-rusqlite = { version = "0.40", features = ["bundled", "serialize", "backup"] }
+rusqlite = { version = "0.41", features = ["bundled", "serialize", "backup"] }
 keyring = { version = "4.2", features = ["v1"] }
 rand = "0.10"
 fs2 = "0.4"
@@ -40,17 +40,17 @@ zeroize = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 aes-gcm = "0.11"
 argon2 = "0.6"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
 hex = "0.4"
 pdfium-render = "0.9"
-ocrs = "0.13"
-rten = "0.26"
+ocrs = "0.14"
+rten = { version = "0.28", features = ["rten_format"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 regex = "1"
 csv = "1"
 lopdf = "0.45"
-skrifa = "0.47"
+skrifa = "0.48"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
