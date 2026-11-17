@@ -65,7 +65,7 @@ impl DbState {
     fn write_with_persist<T>(
         &self,
         work: impl FnOnce(&mut Connection) -> Result<T, String>,
-        persist: impl FnOnce(&Connection) -> Result<(), String>,
+        persist: impl FnOnce(&mut Connection) -> Result<(), String>,
     ) -> Result<T, String> {
         let mut guard = self.conn.lock().map_err(|error| error.to_string())?;
         let current = guard.as_ref().ok_or("the database is closed")?;
@@ -81,20 +81,20 @@ impl DbState {
         if !staged.is_autocommit() {
             return Err("workspace mutation left an unfinished transaction".into());
         }
-        persist(&staged)?;
+        persist(&mut staged)?;
         *guard = Some(staged);
         Ok(result)
     }
 
     pub fn seal(&self) -> Result<(), DbError> {
-        let guard = self.conn.lock().map_err(|_| DbError::PoisonedMutex)?;
-        if let Some(conn) = guard.as_ref() {
+        let mut guard = self.conn.lock().map_err(|_| DbError::PoisonedMutex)?;
+        if let Some(conn) = guard.as_mut() {
             self.persist(conn)?;
         }
         Ok(())
     }
 
-    pub fn persist(&self, conn: &Connection) -> Result<(), DbError> {
+    pub fn persist(&self, conn: &mut Connection) -> Result<(), DbError> {
         let data = conn.serialize(MAIN_DB)?;
         if data.len() as u64 > MAX_DATABASE_BYTES {
             return Err(DbError::InvalidDatabase);
@@ -119,7 +119,7 @@ impl DbState {
 
     pub fn seal_and_close(&self) -> Result<(), DbError> {
         let mut guard = self.conn.lock().map_err(|_| DbError::PoisonedMutex)?;
-        if let Some(conn) = guard.as_ref() {
+        if let Some(conn) = guard.as_mut() {
             self.persist(conn)?;
         }
         *guard = None;
@@ -481,7 +481,7 @@ mod tests {
             .conn
             .lock()
             .unwrap()
-            .as_ref()
+            .as_mut()
             .unwrap()
             .serialize(MAIN_DB)
             .unwrap()
@@ -539,8 +539,8 @@ mod tests {
         let directory = tempdir().unwrap();
         let state = open_with_key(directory.path(), KEY).unwrap();
         let plain = {
-            let guard = state.conn.lock().unwrap();
-            let conn = guard.as_ref().unwrap();
+            let mut guard = state.conn.lock().unwrap();
+            let conn = guard.as_mut().unwrap();
             conn.execute(
                 "INSERT INTO configuration VALUES ('migration-proof','preserved')",
                 [],
@@ -589,8 +589,8 @@ mod tests {
         {
             let state = open_with_key(directory.path(), KEY).unwrap();
             {
-                let guard = state.conn.lock().unwrap();
-                let conn = guard.as_ref().unwrap();
+                let mut guard = state.conn.lock().unwrap();
+                let conn = guard.as_mut().unwrap();
                 conn.execute(
                     "INSERT INTO configuration VALUES ('test','secret value')",
                     [],

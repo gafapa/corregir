@@ -27,7 +27,7 @@ fn derive(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
     Ok(key)
 }
 
-pub fn encrypt(conn: &Connection, password: &str) -> Result<Vec<u8>, String> {
+pub fn encrypt(conn: &mut Connection, password: &str) -> Result<Vec<u8>, String> {
     let serialized = conn.serialize(MAIN_DB).map_err(|error| error.to_string())?;
     if serialized.len() > MAX_BACKUP_BYTES {
         return Err("the workspace exceeds the 128 MiB portable backup limit".into());
@@ -119,7 +119,7 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Connection, String> {
     Ok(conn)
 }
 
-pub fn restore(db: &DbState, restored: Connection) -> Result<(), String> {
+pub fn restore(db: &DbState, mut restored: Connection) -> Result<(), String> {
     let mut guard = db.conn.lock().map_err(|error| error.to_string())?;
     let current = guard.as_ref().ok_or("the database is closed")?;
     for table in [
@@ -144,7 +144,8 @@ pub fn restore(db: &DbState, restored: Connection) -> Result<(), String> {
             );
         }
     }
-    db.persist(&restored).map_err(|error| error.to_string())?;
+    db.persist(&mut restored)
+        .map_err(|error| error.to_string())?;
     *guard = Some(restored);
     Ok(())
 }
@@ -159,8 +160,8 @@ mod tests {
         let second = tempfile::tempdir().unwrap();
         let source = super::super::schema::open_with_key(first.path(), [3; 32]).unwrap();
         let bytes = {
-            let guard = source.conn.lock().unwrap();
-            let conn = guard.as_ref().unwrap();
+            let mut guard = source.conn.lock().unwrap();
+            let conn = guard.as_mut().unwrap();
             conn.execute("INSERT INTO rubrics(title,subject,grade_level,content_json) VALUES ('Recovery test','Science','Year 8','{}')",[]).unwrap();
             encrypt(conn, PASSWORD).unwrap()
         };
@@ -184,8 +185,8 @@ mod tests {
     fn rejects_tampering_truncation_and_short_passwords() {
         let dir = tempfile::tempdir().unwrap();
         let db = super::super::schema::open_with_key(dir.path(), [5; 32]).unwrap();
-        let guard = db.conn.lock().unwrap();
-        let conn = guard.as_ref().unwrap();
+        let mut guard = db.conn.lock().unwrap();
+        let conn = guard.as_mut().unwrap();
         assert!(encrypt(conn, "short").is_err());
         let mut bytes = encrypt(conn, PASSWORD).unwrap();
         let last = bytes.len() - 1;

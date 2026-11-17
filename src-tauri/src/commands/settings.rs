@@ -152,8 +152,8 @@ mod tests {
         };
         settings.validate().unwrap();
         {
-            let guard = db.conn.lock().unwrap();
-            let conn = guard.as_ref().unwrap();
+            let mut guard = db.conn.lock().unwrap();
+            let conn = guard.as_mut().unwrap();
             conn.execute(
                 "INSERT INTO configuration VALUES ('ollama',?1)",
                 [serde_json::to_string(&settings).unwrap()],

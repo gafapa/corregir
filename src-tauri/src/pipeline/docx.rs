@@ -31,7 +31,10 @@ pub fn extract_reader<R: Read + std::io::Seek>(reader: R) -> Result<String, Rend
         if total > 128 * 1024 * 1024 || entry.is_symlink() || entry.encrypted() {
             return Err(RenderError::LimitExceeded);
         }
-        let name = entry.name();
+        // zip 9 rejects entry names that are not valid UTF-8 or CP437; treat those as malformed.
+        let name = entry
+            .name()
+            .map_err(|_| RenderError::Processing("not a supported Word DOCX document".into()))?;
         if name.ends_with(".bin")
             || name.starts_with("word/media/")
             || name.starts_with("word/embeddings/")
